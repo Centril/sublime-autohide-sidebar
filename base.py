@@ -47,8 +47,8 @@ class MoveEventMeta( Thread ):
 	def run( self ):
 		pass
 
-	def move( self, x, y ):
+	def move( self, _id, x, y ):
 		pass
 
-	def leave( self ):
+	def leave( self, _id ):
 		pass

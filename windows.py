@@ -25,8 +25,12 @@ from .base import MoveEventMeta
 
 import atexit
 from ctypes import *
-from ctypes.wintypes import LONG, INT, WPARAM, LPARAM, DWORD
+from ctypes.wintypes import BOOL, HWND, LONG, INT, WPARAM, LPARAM, DWORD
 [user32, kernel32, version, psapi, dwmapi] = [windll.user32, windll.kernel32, windll.version, windll.psapi, windll.dwmapi]
+
+"""
+Win32 types:
+"""
 
 class POINT( Structure ):
 	_fields_ = [('x', LONG), ('y', LONG)]
@@ -37,6 +41,10 @@ class RECT( Structure ):
 class MSLLHOOKSTRUCT( Structure ):
 	_fields_ = [("pt", POINT)]
 
+"""
+Win32 constants:
+"""
+
 WH_MOUSE_LL = 14
 WM_MOUSEMOVE = 0x0200
 GA_ROOT = 2
@@ -44,7 +52,8 @@ PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 #DWMWA_EXTENDED_FRAME_BOUNDS = 9
 
-HOOKPROC = WINFUNCTYPE( LONG, INT, WPARAM, POINTER( MSLLHOOKSTRUCT ) )
+HookProc = WINFUNCTYPE( LONG, INT, WPARAM, POINTER( MSLLHOOKSTRUCT ) )
+EnumWindowsProc = WINFUNCTYPE( BOOL, HWND, LPARAM )
 MODULE_HANDLE = windll.kernel32.GetModuleHandleW( None )
 
 # Get the window where point resides:
@@ -52,35 +61,54 @@ def get_hwnd( x, y ):
 	hwnd = user32.WindowFromPhysicalPoint( POINT( x, y ) )
 	return user32.GetAncestor( hwnd, GA_ROOT ) if hwnd else None
 
+"""
+is_sublime:
+"""
+
+# Returns PID of process:
 def get_pid( hwnd ):
 	pid = DWORD()
 	user32.GetWindowThreadProcessId( hwnd, byref( pid ) )
 	return pid
 
+# Strips null terminated bytes and whitespace:
+import re
+def strip_win32_string( s ):
+	return re.sub('[ \n\t\0]+', '', s[:].strip() )
+
+# Executes a lambda with a buffer with the buffer and length:
+def buffer_get( l, fn ):
+	actual_len = l
+	while actual_len == l:
+		l *= 2
+		v = create_unicode_buffer( l )
+		actual_len = fn( v, len( v ) )
+		if not actual_len: return
+	return strip_win32_string( v )
+
+# Returns name of pid:s process:
 def process_name( pid ):
 	# Get process of window:
 	process = kernel32.OpenProcess( PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid )
-	if not process:
-		return
+	if not process: return
 
 	# Get process basename (test for sublime_text.exe):
-	try:
-		# We will immediately double the length up to MAX_PATH, but the
-		# path may be longer, so we retry until the returned string is
-		# shorter than our buffer.
-		name_len = actual_len = 130
-		while actual_len == name_len:
-			name_len *= 2
-			name = create_unicode_buffer( name_len )
-			actual_len = psapi.GetModuleBaseNameW( process, None, name, len( name ) )
-			if not actual_len:
-				return
+	try: return buffer_get( 130, lambda v, l: psapi.GetModuleBaseNameW( process, None, v, l ) )
+	except: return
+	finally: kernel32.CloseHandle( process )
 
-		return name[:]
-	except:
-		return
-	finally:
-		kernel32.CloseHandle( process )
+# Determines if a window is sublime window:
+def is_sublime( hwnd ):
+	className = buffer_get( 15, lambda v, l: user32.GetClassNameW( hwnd, v, l ) )
+	if className != "PX_WINDOW_CLASS": return False
+
+	pid = get_pid( hwnd )
+	name = process_name( pid )
+	return name and name.rsplit( '.', 2 )[0] == "sublime_text"
+
+"""
+Move event logic:
+"""
 
 def metrics():
 	[l, t, w, h] = [user32.GetSystemMetrics( w ) for w in [76, 77, 78, 79]]
@@ -91,44 +119,68 @@ def metrics():
 def map_coordinates( xf, yf, xt, yt, x, y ):
 	return (x - (xt - xf), y - (yt - yf))
 
+entered_windows = []
 def handle_event( self, x, y ):
+	global win_map, entered_windows
+
+	# Get window where cursor is located:
 	p = POINT()
 	user32.GetPhysicalCursorPos( byref( p ) )
 	x, y = p.x, p.y
-
 	hwnd = get_hwnd( x, y )
-	if not hwnd: return
+	if not (hwnd and hwnd in win_map): return
 
-	active = user32.GetForegroundWindow()
-	if hwnd != active: return
-
-	pid = get_pid( hwnd )
-	name = process_name( pid )
-	if not (name and name.rsplit( '.', 2 )[0] == "sublime_text"): return
-
+	# Map cursor pos to window coordinates:
 	rect = RECT()
-	if not user32.GetWindowRect( active, byref( rect ) ): return
-#	DPI scaling issues?
-#	if dwmapi.DwmGetWindowAttribute( active, DWMWA_EXTENDED_FRAME_BOUNDS, byref( rect ), sizeof( RECT ) ):
+	if not user32.GetWindowRect( hwnd, byref( rect ) ): return
+#	DPI scaling issues? the outcommented code works fine on non-scaled, works bad on scaled.
+#	if dwmapi.DwmGetWindowAttribute( hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref( rect ), sizeof( RECT ) ):
 #		return
 	x, y = map_coordinates( 0, 0, rect.l, rect.t, x, y )
 
-	self.move( x, y )
-	return True
+	# Add to stack of entered_window:
+	window = win_map[hwnd]
+	if window not in entered_windows: entered_windows.append( window )
+
+	# Move!
+	self.move( window, x, y )
+	return window
+
+win_map = {}
+def register_new_window( window ):
+	global win_map
+	windows = win_map.values()
+	if window in windows: return
+
+	def cb( hwnd, lParam ):
+		if (hwnd in win_map): return 1
+		if (not is_sublime( hwnd )): return 1
+		win_map[hwnd] = window
+		return 0
+
+	user32.EnumWindows( EnumWindowsProc( cb ), None )
 
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
 		def py_cb( nCode, wParam, lParam ):
+			global entered_windows
 			if nCode >= 0 and wParam == WM_MOUSEMOVE:
+				# Handle move events:
 				[l, t, r, b] = metrics()
 				[x, y] = [lParam.contents.pt.x, lParam.contents.pt.y]
-				
-				if not handle_event( self, max( l, min( r, x ) ), max( t, min( b, y ) ) ):
-					self.leave()
+				window = handle_event( self, max( l, min( r, x ) ), max( t, min( b, y ) ) )
+
+				# Handle leave events:
+				leaving = entered_windows[:]
+				entered_windows = []
+				for w in leaving:
+					if w != window: self.leave( w )
+					else: entered_windows.append( w )
+
 			return user32.CallNextHookEx( None, nCode, wParam, lParam )
 
 		# Register callback:
-		cb = HOOKPROC( py_cb )
+		cb = HookProc( py_cb )
 		self.hook = user32.SetWindowsHookExA( WH_MOUSE_LL, cb, MODULE_HANDLE, 0 )
 
 		# Event pump:
