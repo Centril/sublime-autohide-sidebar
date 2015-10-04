@@ -110,6 +110,9 @@ def is_sublime( hwnd ):
 Move event logic:
 """
 
+entered_windows = []
+win_map = {}
+
 def metrics():
 	[l, t, w, h] = [user32.GetSystemMetrics( w ) for w in [76, 77, 78, 79]]
 	return [l, t, w - l, h + t]
@@ -119,11 +122,10 @@ def metrics():
 def map_coordinates( xf, yf, xt, yt, x, y ):
 	return (x - (xt - xf), y - (yt - yf))
 
-entered_windows = []
-def handle_event( self, x, y ):
-	global win_map, entered_windows
-
-	# Get window where cursor is located:
+# Get window and window mapped coordinates at cursor position:
+def coordinates_and_hwnd():
+	global win_map
+	# Get coordinates and window:
 	p = POINT()
 	user32.GetPhysicalCursorPos( byref( p ) )
 	x, y = p.x, p.y
@@ -137,25 +139,36 @@ def handle_event( self, x, y ):
 #	if dwmapi.DwmGetWindowAttribute( hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref( rect ), sizeof( RECT ) ):
 #		return
 	x, y = map_coordinates( 0, 0, rect.l, rect.t, x, y )
+	return (x, y, win_map[hwnd])
+
+def handle_event( self, x, y ):
+	r = coordinates_and_hwnd()
+	if not r: return
+	x, y, window = r
 
 	# Add to stack of entered_window:
-	window = win_map[hwnd]
+	global entered_windows
 	if window not in entered_windows: entered_windows.append( window )
 
 	# Move!
 	self.move( window, x, y )
 	return window
 
-win_map = {}
-def register_new_window( window ):
+def window_coordinates( _id ):
+	r = coordinates_and_hwnd()
+	if not r: return
+	x, y, window = r
+	return (x, y) if window == _id else None
+
+def register_new_window( _id ):
 	global win_map
 	windows = win_map.values()
-	if window in windows: return
+	if _id in windows: return
 
 	def cb( hwnd, lParam ):
 		if (hwnd in win_map): return 1
 		if (not is_sublime( hwnd )): return 1
-		win_map[hwnd] = window
+		win_map[hwnd] = _id
 		return 0
 
 	user32.EnumWindows( EnumWindowsProc( cb ), None )
