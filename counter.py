@@ -29,10 +29,10 @@ class Counter():
 		self.lock = Lock()
 		self.counter = start
 
-	def inc( self ): return self._do( lambda:  1 )
-	def dec( self ): return self._do( lambda: -1 )
+	def inc( self ): return self._do(  1 )
+	def dec( self ): return self._do( -1 )
 
-	def _do( self, fn ):
+	def _do( self, m ):
 		with self.lock:
-			self.counter += fn()
+			self.counter += m
 			return self.counter
