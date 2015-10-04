@@ -111,7 +111,7 @@ def win_if_toggle( _id, pred ):
 	if window and pred( states[_id] ): toggle( window )
 
 # Hide sidebars in new windows:
-class NewWindowListener( sublime_plugin.EventListener ):
+class Listener( sublime_plugin.EventListener ):
 	def on_post_window_command( self, window, name, args ):
 		if name != "new_window": return
 		global states, last_window
