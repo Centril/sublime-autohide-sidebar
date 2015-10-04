@@ -122,6 +122,10 @@ def metrics():
 def map_coordinates( xf, yf, xt, yt, x, y ):
 	return (x - (xt - xf), y - (yt - yf))
 
+def window_rect( hwnd ):
+	rect = RECT()
+	return rect if user32.GetWindowRect( hwnd, byref( rect ) ) else None
+
 # Get window and window mapped coordinates at cursor position:
 def coordinates_and_hwnd():
 	global win_map
@@ -133,18 +137,16 @@ def coordinates_and_hwnd():
 	if not (hwnd and hwnd in win_map): return
 
 	# Map cursor pos to window coordinates:
-	rect = RECT()
-	if not user32.GetWindowRect( hwnd, byref( rect ) ): return
+	rect = window_rect( hwnd )
+	return (map_coordinates( 0, 0, rect.l, rect.t, x, y ), win_map[hwnd]) if rect else None
 #	DPI scaling issues? the outcommented code works fine on non-scaled, works bad on scaled.
 #	if dwmapi.DwmGetWindowAttribute( hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref( rect ), sizeof( RECT ) ):
 #		return
-	x, y = map_coordinates( 0, 0, rect.l, rect.t, x, y )
-	return (x, y, win_map[hwnd])
 
 def handle_event( self, x, y ):
 	r = coordinates_and_hwnd()
 	if not r: return
-	x, y, window = r
+	(x, y), window = r
 
 	# Add to stack of entered_window:
 	global entered_windows
@@ -154,11 +156,24 @@ def handle_event( self, x, y ):
 	self.move( window, x, y )
 	return window
 
+def find_key( _dict, needle ):
+	for k, v in _dict.items():
+		if v == needle: return k
+
+"""
+Public API
+"""
+
+def window_width( _id ):
+	global win_map
+	rect = window_rect( find_key( win_map, _id ) )
+	return rect.r - rect.l if rect else None
+
 def window_coordinates( _id ):
 	r = coordinates_and_hwnd()
 	if not r: return
-	x, y, window = r
-	return (x, y) if window == _id else None
+	xy, window = r
+	return xy if window == _id else None
 
 def register_new_window( _id ):
 	global win_map

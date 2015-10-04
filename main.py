@@ -39,16 +39,19 @@ from .counter import Counter
 # Cross platform mouse movement event handler 
 import sys
 if sys.platform == 'darwin':
-	from .mac import MoveEvent, register_new_window, window_coordinates
+	from .mac import MoveEvent, register_new_window, window_coordinates, window_width
 elif sys.platform == 'win32':
-	from .windows import MoveEvent, register_new_window, window_coordinates
+	from .windows import MoveEvent, register_new_window, window_coordinates, window_width
 else:
-	from .x11 import MoveEvent, register_new_window, window_coordinates
+	from .x11 import MoveEvent, register_new_window, window_coordinates, window_width
 
 # Holds toggled states and on_load counter per window:
 states = {}
 on_load_counter = {}
 last_window = sublime.active_window().id()
+HIDE_PADDING_X = 50
+HIDE_DEFAULT_X = 450
+SHOULD_SHOW_X = 25
 
 # Thanks https://github.com/titoBouzout
 # https://github.com/SublimeText/SideBarFolders/blob/fb4b2ba5b8fe5b14453eebe8db05a6c1b918e029/SideBarFolders.py#L59-L75
@@ -81,10 +84,13 @@ def toggle( window ):
 	_toggle( window )
 
 # Given an x coordinate: whether or not sidebar should hide:
-def should_hide( x ): return x >= 300
+def should_hide( _id, x ):
+	w = window_width( _id ) or HIDE_DEFAULT_X
+	w2 = window_from_id( _id ).active_view().viewport_extent()[0] or 0
+	return x >= (w - w2 - HIDE_PADDING_X)
 
 # Given an x coordinate: whether or not sidebar should show:
-def should_show( x ): return x < 25
+def should_show( _id, x ): return x < SHOULD_SHOW_X
 
 # Registers a new window:
 def register_new( _id ):
@@ -96,7 +102,7 @@ def register_new( _id ):
 def hide_or_show( _id, window ):
 	global states
 	r = window_coordinates( _id )
-	states[_id] = (not should_hide( r[0] ) if is_sidebar_open( window ) else should_show( r[0] )) if r else False
+	states[_id] = (not should_hide( _id, r[0] ) if is_sidebar_open( window ) else should_show( _id, r[0] )) if r else False
 	if (states[_id] if r else is_sidebar_open( window )): _toggle( window )
 
 def window_from_id( _id ):
@@ -132,7 +138,8 @@ class Listener( sublime_plugin.EventListener ):
 		sublime.set_timeout_async( lambda: not c.dec() and hide_or_show( _id, window ), 0 )
 
 class Tracker( MoveEvent ):
-	def move( self, _id, x, y ): win_if_toggle( _id, lambda s: (should_hide if s else should_show)( x ) )
+	def move( self, _id, x, y ):
+		win_if_toggle( _id, lambda s: (should_hide if s else should_show)( _id, x ) )
 	def leave( self, _id ): win_if_toggle( _id, lambda s: s )
 
 T = Tracker()
