@@ -166,8 +166,7 @@ def register_new_window( _id ):
 	if _id in windows: return
 
 	def cb( hwnd, lParam ):
-		if (hwnd in win_map): return 1
-		if (not is_sublime( hwnd )): return 1
+		if (hwnd in win_map) or (not is_sublime( hwnd )): return 1
 		win_map[hwnd] = _id
 		return 0
 
