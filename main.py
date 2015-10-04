@@ -31,7 +31,7 @@ __email__ = "twingoow@gmail.com"
 __status__ = "Development"
 
 import sublime, sublime_plugin
-from threading import Lock
+from .counter import Counter
 
 # TEMPORARY @TODO REMOVE
 #sublime.log_commands( True )
@@ -39,11 +39,11 @@ from threading import Lock
 # Cross platform mouse movement event handler 
 import sys
 if sys.platform == 'darwin':
-	from mac import MoveEvent, register_new_window, window_coordinates
+	from .mac import MoveEvent, register_new_window, window_coordinates
 elif sys.platform == 'win32':
 	from .windows import MoveEvent, register_new_window, window_coordinates
 else:
-	from x11 import MoveEvent, register_new_window, window_coordinates
+	from .x11 import MoveEvent, register_new_window, window_coordinates
 
 # Holds toggled states and on_load counter per window:
 states = {}
@@ -86,11 +86,11 @@ def should_hide( x ): return x >= 300
 # Given an x coordinate: whether or not sidebar should show:
 def should_show( x ): return x < 25
 
-# Hide ALL sidebars:
-for window in sublime.windows():
-	register_new_window( window.id() )
-	if is_sidebar_open( window ): _toggle( window )
-	states[window.id()] = False
+# Registers a new window:
+def register_new( _id ):
+	global on_load_counter
+	register_new_window( _id )
+	on_load_counter[_id] = Counter()
 
 # Hides sidebar if it should be hidden, or shows if it should:
 def hide_or_show( _id, window ):
@@ -98,11 +98,6 @@ def hide_or_show( _id, window ):
 	r = window_coordinates( _id )
 	states[_id] = (not should_hide( r[0] ) if is_sidebar_open( window ) else should_show( r[0] )) if r else False
 	if (states[_id] if r else is_sidebar_open( window )): _toggle( window )
-
-def inc( c ):
-	with c[1]:
-		c[0] -= 1
-		return c[0]
 
 def window_from_id( _id ):
 	if _id:
@@ -113,7 +108,7 @@ def window_from_id( _id ):
 def win_if_toggle( _id, pred ):
 	global states
 	window = window_from_id( _id )
-	if window and pred( states[window.id()] ): toggle( window )
+	if window and pred( states[_id] ): toggle( window )
 
 # Hide sidebars in new windows:
 class NewWindowListener( sublime_plugin.EventListener ):
@@ -123,8 +118,7 @@ class NewWindowListener( sublime_plugin.EventListener ):
 		last_window += 1
 		_id = last_window
 
-		register_new_window( _id )
-		on_load_counter[_id] = [0, Lock()]
+		register_new( _id )
 
 		states[_id] = False
 		if is_sidebar_open( window ): _toggle( window )
@@ -134,13 +128,24 @@ class NewWindowListener( sublime_plugin.EventListener ):
 		window = view.window()
 		_id = window.id()
 		c = on_load_counter[_id]
-		c[0] += 1
-		sublime.set_timeout_async( lambda: not inc( c ) and hide_or_show( _id, window ), 0 )
+		c.inc()
+		sublime.set_timeout_async( lambda: not c.dec() and hide_or_show( _id, window ), 0 )
 
-class M( MoveEvent ):
+class Tracker( MoveEvent ):
 	def move( self, _id, x, y ): win_if_toggle( _id, lambda s: (should_hide if s else should_show)( x ) )
 	def leave( self, _id ): win_if_toggle( _id, lambda s: s )
 
-m = M()
-m.start()
-#m.stop()
+T = Tracker()
+
+def plugin_loaded():
+	# Hide ALL sidebars:
+	for window in sublime.windows():
+		_id = window.id()
+		register_new( _id )
+		if is_sidebar_open( window ): _toggle( window )
+		states[_id] = False
+
+	T.start()
+
+def plugin_unloaded():
+	T.stop()
