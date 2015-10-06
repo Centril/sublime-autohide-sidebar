@@ -157,8 +157,7 @@ def handle_event( self, x, y ):
 	return window
 
 def find_key( _dict, needle ):
-	for k, v in _dict.items():
-		if v == needle: return k
+	return next( (k for k, v in _dict.items() if v == needle), None )
 
 """
 Public API
