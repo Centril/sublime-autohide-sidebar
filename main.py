@@ -47,13 +47,17 @@ elif sys.platform == 'win32':
 else:
 	from .x11 import MoveEvent, register_new_window, window_coordinates, window_width
 
-# Holds toggled states and on_load counter per window:
-toggled = {}
-on_load_counter = {}
-last_window = sublime.active_window().id()
+# Constants:
 HIDE_PADDING_X = 50
 HIDE_DEFAULT_X = 450
 SHOULD_SHOW_X = 25
+
+# id of last_window:
+last_window = sublime.active_window().id()
+
+# Per window states:
+toggled = {}
+on_load_counter = {}
 
 # Thanks https://github.com/titoBouzout
 # https://github.com/SublimeText/SideBarFolders/blob/fb4b2ba5b8fe5b14453eebe8db05a6c1b918e029/SideBarFolders.py#L59-L75
