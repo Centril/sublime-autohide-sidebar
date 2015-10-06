@@ -110,10 +110,7 @@ def hide_or_show( _id, window ):
 	if (toggled[_id] if r else is_sidebar_open( window )): _toggle( window )
 
 def window_from_id( _id ):
-	if _id:
-		for w in sublime.windows():
-			if _id == w.id(): return w
-	else: return sublime.active_window()
+	return next( (w for w in sublime.windows() if _id == w.id()), None ) if _id else sublime.active_window()
 
 def win_if_toggle( _id, pred ):
 	global toggled
