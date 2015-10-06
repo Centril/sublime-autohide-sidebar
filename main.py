@@ -58,6 +58,7 @@ last_window = sublime.active_window().id()
 # Per window states:
 toggled = {}
 on_load_counter = {}
+suspended = {}
 
 # Thanks https://github.com/titoBouzout
 # https://github.com/SublimeText/SideBarFolders/blob/fb4b2ba5b8fe5b14453eebe8db05a6c1b918e029/SideBarFolders.py#L59-L75
@@ -103,6 +104,7 @@ def register_new( _id, window ):
 	global toggled, on_load_counter
 	register_new_window( _id )
 	on_load_counter[_id] = Counter()
+	suspended[_id] = False
 	toggled[_id] = False
 	if is_sidebar_open( window ): _toggle( window )
 
@@ -117,7 +119,8 @@ def window_from_id( _id ):
 	return next( (w for w in sublime.windows() if _id == w.id()), None ) if _id else sublime.active_window()
 
 def win_if_toggle( _id, pred ):
-	global toggled
+	global toggled, suspended
+	if suspended[_id]: return
 	window = window_from_id( _id )
 	if window and pred( toggled[_id] ): toggle( window )
 
@@ -129,13 +132,21 @@ class Listener( sublime_plugin.EventListener ):
 		last_window += 1
 		register_new( last_window, window )
 
+	# Non-fake toggle_side_bar: Suspend tracking for this window!
 	def on_window_command( self, window, name, args ):
-		print( "on_window_command:", window, name, args )
+		if name != 'toggle_side_bar' or args == ID: return
+		_id = window.id()
+		global toggled, suspended
+		suspended[_id] = not suspended[_id]
+		toggled[_id] = not toggled[_id]
 
 	def on_load(self, view):
-		global on_load_counter
+		global on_load_counter, suspended
 		window = view.window()
 		_id = window.id()
+
+		if suspended[_id]: return
+
 		c = on_load_counter[_id]
 		c.inc()
 		sublime.set_timeout_async( lambda: not c.dec() and hide_or_show( _id, window ), 0 )

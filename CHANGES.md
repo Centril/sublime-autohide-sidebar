@@ -8,5 +8,5 @@
 + Basic general plugin work done for the cross platform part:
 	- The sidebar shows and hides
 	- The hide-trigger area depends on size of sidebar.
-+ @TODO: Add feature to temporarily stop the plugin when sidebar is manually toggled by user.
++ Feature: (per window) Temporarily stop the plugin when sidebar is manually toggled by user.
 + @TODO: Add feature to customize show-trigger area size.
