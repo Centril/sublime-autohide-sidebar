@@ -9,4 +9,4 @@
 	- The sidebar shows and hides
 	- The hide-trigger area depends on size of sidebar.
 + Feature: (per window) Temporarily stop the plugin when sidebar is manually toggled by user.
-+ @TODO: Add feature to customize show-trigger area size.
++ Feature: Customizing show/hide-trigger area size.

@@ -32,7 +32,11 @@ __status__ = "Development"
 
 ID = 'sublime-autohide-sidebar'
 
-import sublime, sublime_plugin
+#
+# Import stuff:
+#
+from sublime import active_window, windows, load_settings, set_timeout_async
+from sublime_plugin import EventListener
 from .counter import Counter
 
 #
@@ -49,9 +53,7 @@ else: from .x11\
 #
 # Constants:
 #
-HIDE_PADDING_X = 50
 HIDE_DEFAULT_X = 450
-SHOULD_SHOW_X = HIDE_PADDING_X
 
 #
 # Per window wrapper:
@@ -96,12 +98,15 @@ class Wrapper( object ):
 
 	# Given an x coordinate: whether or not sidebar should hide:
 	def should_hide( self, x ):
+		global settings
 		w = window_width( self.id ) or HIDE_DEFAULT_X
 		w2 = self.window.active_view().viewport_extent()[0] or 0
-		return x >= (w - w2 - HIDE_PADDING_X)
+		return x >= (w - w2 - settings.get( 'hide_show_padding_x' ) * 2)
 
 	# Given an x coordinate: whether or not sidebar should show:
-	def should_show( self, x ): return x < SHOULD_SHOW_X
+	def should_show( self, x ):
+		global settings
+		return x < settings.get( 'hide_show_padding_x' )
 
 	# Toggles side bar if pred is fulfilled and flips toggled state:
 	def win_if_toggle( self, pred ):
@@ -136,7 +141,7 @@ wrappers = {}
 # Returns a wrapper for _id:
 def wrapper( _id ):
 	global wrappers
-	return wrappers[_id or sublime.active_window().id()]
+	return wrappers[_id or active_window().id()]
 
 # Registers a new window:
 def register_new( _id, window ):
@@ -162,7 +167,7 @@ def on_load_counter( _id ):
 	return on_load_counters[_id]
 
 # Hide sidebars in new windows:
-class Listener( sublime_plugin.EventListener ):
+class Listener( EventListener ):
 	# Non-fake toggle_side_bar: Suspend tracking for this window!
 	def on_window_command( self, window, name, args ):
 		if name == 'toggle_side_bar' and args != ID:
@@ -177,7 +182,7 @@ class Listener( sublime_plugin.EventListener ):
 		c.inc()
 
 		# Handle on_load, get the appropriate wrapper or make one:
-		sublime.set_timeout_async( lambda: not c.dec() and
+		set_timeout_async( lambda: not c.dec() and
 			wrapper_or_register( _id, window ).hide_or_show(), 0 )
 
 class Tracker( MoveEvent ):
@@ -187,8 +192,12 @@ class Tracker( MoveEvent ):
 T = Tracker()
 
 def plugin_loaded():
+	# Load settings:
+	global settings
+	settings = load_settings( 'sublime-autohide-sidebar.sublime-settings' )
+
 	# Hide ALL sidebars:
-	for w in sublime.windows(): register_new( w.id(), w )
+	for w in windows(): register_new( w.id(), w )
 
 	# Start receiving events:
 	T.start()
