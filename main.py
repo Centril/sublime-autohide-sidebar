@@ -35,7 +35,9 @@ ID = 'sublime-autohide-sidebar'
 import sublime, sublime_plugin
 from .counter import Counter
 
+#
 # Cross platform mouse movement event handler 
+#
 import sys
 if sys.platform == 'darwin': from .mac\
 	import MoveEvent, register_new_window, window_coordinates, window_width
@@ -44,12 +46,16 @@ elif sys.platform == 'win32': from .windows\
 else: from .x11\
 	import MoveEvent, register_new_window, window_coordinates, window_width
 
+#
 # Constants:
+#
 HIDE_PADDING_X = 50
 HIDE_DEFAULT_X = 450
 SHOULD_SHOW_X = HIDE_PADDING_X
 
+#
 # Per window wrapper:
+#
 class Wrapper( object ):
 	def __init__( self, _id, window ):
 		self.id = _id
@@ -122,12 +128,15 @@ class Wrapper( object ):
 	# On leave handler:
 	def leave( self ): self.win_if_toggle( lambda s: s )
 
+#
+# Making and getting wrappers:
+#
 wrappers = {}
 
 # Returns a wrapper for _id:
 def wrapper( _id ):
 	global wrappers
-	return wrappers[_id]
+	return wrappers[_id or sublime.active_window().id()]
 
 # Registers a new window:
 def register_new( _id, window ):
@@ -140,6 +149,10 @@ def register_new( _id, window ):
 def wrapper_or_register( _id, window ):
 	global wrappers
 	return wrapper( _id ) if _id in wrappers else register_new( _id, window )
+
+#
+# Plugin listeners & loading:
+#
 
 # Get an on_load_counter, or set one if not before:
 on_load_counters = {}
