@@ -35,35 +35,92 @@ ID = 'sublime-autohide-sidebar'
 import sublime, sublime_plugin
 from .counter import Counter
 
-# TEMPORARY @TODO REMOVE
-#sublime.log_commands( True )
-
 # Cross platform mouse movement event handler 
 import sys
-if sys.platform == 'darwin':
-	from .mac import MoveEvent, register_new_window, window_coordinates, window_width
-elif sys.platform == 'win32':
-	from .windows import MoveEvent, register_new_window, window_coordinates, window_width
-else:
-	from .x11 import MoveEvent, register_new_window, window_coordinates, window_width
+if sys.platform == 'darwin': from .mac\
+	import MoveEvent, register_new_window, window_coordinates, window_width
+elif sys.platform == 'win32': from .windows\
+	import MoveEvent, register_new_window, window_coordinates, window_width
+else: from .x11\
+	import MoveEvent, register_new_window, window_coordinates, window_width
 
 # Constants:
 HIDE_PADDING_X = 50
 HIDE_DEFAULT_X = 450
-SHOULD_SHOW_X = 25
+SHOULD_SHOW_X = HIDE_PADDING_X
 
-# id of last_window:
-last_window = sublime.active_window().id()
-
-# Per window states:
+# Per window wrapper:
 class Wrapper( object ):
 	def __init__( self, _id, window ):
+		self.id = _id
+		self.window = window
 		self.toggled = False
 		self.suspended = False
-		self.on_load_counter = Counter()
 
 		register_new_window( _id )
-		if is_sidebar_open( window ): _toggle( window )
+		if self.is_sidebar_open(): self._toggle()
+
+	# Thanks https://github.com/titoBouzout
+	# https://github.com/SublimeText/SideBarFolders/blob/fb4b2ba5b8fe5b14453eebe8db05a6c1b918e029/SideBarFolders.py#L59-L75
+	def is_sidebar_open( self ):
+		view = self.window.active_view()
+		if view:
+			sel1 = view.sel()[0]
+			self.window.run_command( 'focus_side_bar' )
+			self.window.run_command( 'move',
+				{"by": "characters", "forward": True} )
+			sel2 = view.sel()[0]
+			if sel1 != sel2:
+				self.window.run_command( 'move',
+					{"by": "characters", "forward": False} )
+				return False
+			else:
+				group, index = self.window.get_view_index( view )
+				self.window.focus_view( view )
+				self.window.focus_group( group )
+				return True
+		return True # by default assume it's open if no view is opened
+
+	# Toggles the sidebar:
+	def _toggle( self ): self.window.run_command( "toggle_side_bar", ID )
+
+	def toggle_suspended( self ):
+		self.suspended = not self.suspended
+		self.toggled = not self.toggled
+
+	# Given an x coordinate: whether or not sidebar should hide:
+	def should_hide( self, x ):
+		w = window_width( self.id ) or HIDE_DEFAULT_X
+		w2 = self.window.active_view().viewport_extent()[0] or 0
+		return x >= (w - w2 - HIDE_PADDING_X)
+
+	# Given an x coordinate: whether or not sidebar should show:
+	def should_show( self, x ): return x < SHOULD_SHOW_X
+
+	# Toggles side bar if pred is fulfilled and flips toggled state:
+	def win_if_toggle( self, pred ):
+		if self.suspended: return
+		if pred( self.toggled ):
+			self.toggled = not self.toggled
+			self._toggle()
+
+	# Hides sidebar if it should be hidden, or shows if it should:
+	def hide_or_show( self ):
+		if self.suspended: return
+		r = window_coordinates( self.id )
+		self.toggled = (not self.should_hide( r[0] )
+						if self.is_sidebar_open()
+						else self.should_show( r[0] ) )\
+						if r else False
+		if (self.toggled if r else self.is_sidebar_open()): self._toggle()
+
+	# On move handler:
+	def move( self, x ):
+		self.win_if_toggle( lambda s:
+			(self.should_hide if s else self.should_show)( x ))
+
+	# On leave handler:
+	def leave( self ): self.win_if_toggle( lambda s: s )
 
 wrappers = {}
 
@@ -75,97 +132,54 @@ def wrapper( _id ):
 # Registers a new window:
 def register_new( _id, window ):
 	global wrappers
-	wrappers[_id] = Wrapper( _id, window )
+	w = Wrapper( _id, window )
+	wrappers[_id] = w
+	return w
 
-# Thanks https://github.com/titoBouzout
-# https://github.com/SublimeText/SideBarFolders/blob/fb4b2ba5b8fe5b14453eebe8db05a6c1b918e029/SideBarFolders.py#L59-L75
-def is_sidebar_open( window ):
-	view = window.active_view()
-	if view:
-		sel1 = view.sel()[0]
-		window.run_command( 'focus_side_bar' )
-		window.run_command( 'move', {"by": "characters", "forward": True} )
-		sel2 = view.sel()[0]
-		if sel1 != sel2:
-			window.run_command( 'move', {"by": "characters", "forward": False} )
-			return False
-		else:
-			group, index = window.get_view_index( view )
-			window.focus_view( view )
-			window.focus_group( group )
-			return True
-	return True # by default assume it's open if no view is opened
+# Returns the wrapper, registers it if not:
+def wrapper_or_register( _id, window ):
+	global wrappers
+	return wrapper( _id ) if _id in wrappers else register_new( _id, window )
 
-# Toggles the sidebar:
-def _toggle( window ): window.run_command( "toggle_side_bar", ID )
-
-# Toggles side bar and remembers state:
-def toggle( window ):
-	_id = window.id()
-	wrapper( _id ).toggled = not wrapper( _id ).toggled
-	_toggle( window )
-
-# Given an x coordinate: whether or not sidebar should hide:
-def should_hide( _id, x ):
-	w = window_width( _id ) or HIDE_DEFAULT_X
-	w2 = window_from_id( _id ).active_view().viewport_extent()[0] or 0
-	return x >= (w - w2 - HIDE_PADDING_X)
-
-# Given an x coordinate: whether or not sidebar should show:
-def should_show( _id, x ): return x < SHOULD_SHOW_X
-
-# Hides sidebar if it should be hidden, or shows if it should:
-def hide_or_show( _id, window ):
-	r = window_coordinates( _id )
-	wrapper( _id ).toggled = (not should_hide( _id, r[0] ) if is_sidebar_open( window ) else should_show( _id, r[0] )) if r else False
-	if (wrapper( _id ).toggled if r else is_sidebar_open( window )): _toggle( window )
-
-def window_from_id( _id ):
-	return next( (w for w in sublime.windows() if _id == w.id()), None ) if _id else sublime.active_window()
-
-def win_if_toggle( _id, pred ):
-	if wrapper( _id ).suspended: return
-	window = window_from_id( _id )
-	if window and pred( wrapper( _id ).toggled ): toggle( window )
+# Get an on_load_counter, or set one if not before:
+on_load_counters = {}
+def on_load_counter( _id ):
+	global on_load_counters
+	if _id not in on_load_counters: on_load_counters[_id] = Counter()
+	return on_load_counters[_id]
 
 # Hide sidebars in new windows:
 class Listener( sublime_plugin.EventListener ):
-	def on_post_window_command( self, window, name, args ):
-		if name != "new_window": return
-		global last_window
-		last_window += 1
-		register_new( last_window, window )
-
 	# Non-fake toggle_side_bar: Suspend tracking for this window!
 	def on_window_command( self, window, name, args ):
-		if name != 'toggle_side_bar' or args == ID: return
-		_id = window.id()
-		wrapper( _id ).suspended = not wrapper( _id ).suspended
-		wrapper( _id ).toggled = not wrapper( _id ).toggled
+		if name == 'toggle_side_bar' and args != ID:
+			wrapper( window.id() ).toggle_suspended()
 
-	def on_load(self, view):
+	# Wait: last on_load in sequence => make or get wrapper and hide/show it.
+	def on_load( self, view ):
 		window = view.window()
 		_id = window.id()
 
-		if wrapper( _id ).suspended: return
-
-		c = wrapper( _id ).on_load_counter
+		c = on_load_counter( _id )
 		c.inc()
-		sublime.set_timeout_async( lambda: not c.dec() and hide_or_show( _id, window ), 0 )
+
+		# Handle on_load, get the appropriate wrapper or make one:
+		sublime.set_timeout_async( lambda: not c.dec() and
+			wrapper_or_register( _id, window ).hide_or_show(), 0 )
 
 class Tracker( MoveEvent ):
-	def move( self, _id, x, y ):
-		win_if_toggle( _id, lambda s: (should_hide if s else should_show)( _id, x ) )
-	def leave( self, _id ): win_if_toggle( _id, lambda s: s )
+	def move( self, _id, x, y ): wrapper( _id ).move( x )
+	def leave( self, _id ): wrapper( _id ).leave()
 
 T = Tracker()
 
 def plugin_loaded():
 	# Hide ALL sidebars:
-	for window in sublime.windows():
-		register_new( window.id(), window )
+	for w in sublime.windows(): register_new( w.id(), w )
 
+	# Start receiving events:
 	T.start()
 
 def plugin_unloaded():
+	# Stop receiving events:
 	T.stop()
