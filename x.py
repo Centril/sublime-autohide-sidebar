@@ -21,12 +21,11 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from base import MoveEventMeta
+from base import MoveEventMeta, find_key, map_coordinates
 
 # Imports:
 from contextlib import contextmanager
 from os import popen
-import atexit
 from ctypes import *
 from ctypes.util import find_library
 
@@ -35,19 +34,20 @@ def lib( l ):
 	if not path: quit( "Can't find %s!" % l )
 	return CDLL( path )
 
-# Get Xlib & libc:
-x, libc = map( lib, ["X11", "c"] )
+# Get Xlib:
+X11 = lib( "X11" )
 
 # Typedefs:
+class Display( Structure): pass
+
 Bool = c_int
 Time = c_ulong
 Atom = c_ulong
-DisplayPtr = c_void_p
+DisplayPtr = POINTER( Display )
 Window = c_ulong
 WindowPtr = POINTER( Window )
 XPointer = c_char_p
 
-# Typedefs: Structs & Unions & FunPtr:s:
 class XAnyEvent( Structure ):
 	_fields_ = [
 		('type', c_int),
@@ -90,6 +90,7 @@ class XEvent( Union ):
 	]
 
 EventPredicate = CFUNCTYPE( Bool, DisplayPtr, POINTER( XEvent ), XPointer )
+X11.XOpenDisplay.restype = DisplayPtr
 
 # Constants: XWindow._property:
 MAX_PROPERTY_VALUE_LEN = int( 4096 / 4 )
@@ -109,15 +110,15 @@ EventMask = PointerMotionMask | LeaveWindowMask
 
 # Returns atom identifier associated with specified prop string:
 def intern_atom( disp, prop ):
-	return x.XInternAtom( disp, c_char_p( prop.encode() ), 0 )
+	return X11.XInternAtom( disp, c_char_p( prop.encode() ), 0 )
 
 @contextmanager
 def x_lock( disp ):
 	try:
-		x.XLockDisplay( disp )
+		X11.XLockDisplay( disp )
 		yield 
 	finally:
-		x.XUnlockDisplay( disp )
+		X11.XUnlockDisplay( disp )
 
 # XWindow: a wrapper around X11 Windows:
 class XWindow( object ):
@@ -135,7 +136,7 @@ class XWindow( object ):
 	# Returns root window:
 	def root( disp ):
 		with x_lock( disp ): 
-			return XWindow( disp, x.XRootWindow( disp, 0 ) )
+			return XWindow( disp, X11.XRootWindow( disp, 0 ) )
 
 	# Retrieves a property of X11 window of prop_name:
 	def _property( self, xa_prop_type, prop_name, mbuf = None ):
@@ -148,7 +149,7 @@ class XWindow( object ):
 
 		# MAX_PROPERTY_VALUE_LEN / 4 explanation (XGetWindowProperty manpage):
 		# long_length = Length in 32-bit multiples of the data to be retrieved.
-		s = x.XGetWindowProperty( self.disp, self.win, xa_prop_name, 0,
+		s = X11.XGetWindowProperty( self.disp, self.win, xa_prop_name, 0,
 				MAX_PROPERTY_VALUE_LEN, 0, xa_prop_type,
 				byref( xa_ret_type ), byref( ret_format ),
 				byref( ret_nitems ), byref( c_ulong() ), byref( ret_prop ) )
@@ -157,7 +158,7 @@ class XWindow( object ):
 		if s != Success: return print( "Can't get property: " + prop_name )
 		if xa_ret_type.value != xa_prop_type:
 			print( "Invalid type of property: " + prop_name )
-			x.XFree( ret_prop )
+			X11.XFree( ret_prop )
 			return
 
 		if mbuf:
@@ -167,7 +168,7 @@ class XWindow( object ):
 			buf = create_string_buffer( byte_size )
 
 		memmove( buf, ret_prop, byte_size )
-		x.XFree( ret_prop )
+		X11.XFree( ret_prop )
 		return buf
 
 	# Get top level X11 windows:
@@ -202,7 +203,40 @@ class XWindow( object ):
 	# Allows events specified by mask to happen for window:
 	def select_input( self, mask ):
 		with x_lock( self.disp ):
-			x.XSelectInput( self.disp, self.win, mask )
+			X11.XSelectInput( self.disp, self.win, mask )
+
+	# Returns a tuple ((x-pos, y-pos, width, height), root_window) of window:
+	def geom( self ):
+		root = Window()
+		rect = [c_int(), c_int(), c_uint(), c_uint()]
+		refs = [byref( e ) for e in rect]
+
+		# Get geometry and roof of window, ignore rest:
+		with x_lock( self.disp ):
+			X11.XGetGeometry( self.disp, self.win, byref( root ),
+				refs[0], refs[1], refs[2], refs[3],
+				byref( c_uint() ), byref( c_uint() ) )
+
+		# Translate if needed (not same window as root) to root coordinates:
+		if self.win != root:
+			with x_lock( self.disp ):
+				X11.XTranslateCoordinates( self.disp, self.win, root,
+					rect[0], rect[1], refs[0], refs[1], byref( Window() ) )
+
+		# Return values & make a new window wrapper:
+		return (tuple( e.value for e in rect ), XWindow( self.disp, root ))
+
+	# Returns the position of pointer relative to window:
+	def pointer( self ):
+		w1, w2 = [byref( Window() ) for _ in range( 2 )]
+		xys = [c_int() for _ in range( 4 )]
+		refs = [byref( e ) for e in xys]
+
+		with x_lock( self.disp ):
+			X11.XQueryPointer( self.disp, self.win, w1, w2,
+				refs[0], refs[1], refs[2], refs[3], byref( c_ulong() ) )
+
+		return tuple( e.value for e in xys )
 
 # Checks if window is a sublime text window:
 def is_sublime( win ):
@@ -214,30 +248,62 @@ def is_sublime( win ):
 	title = win.title()
 	return title.endswith( ' - Sublime Text' ) if title else False
 
-# Initialize X11: Threading, get Display & Root Window:
-if not x.XInitThreads(): quit( "X11 doesn't support multithreading." )
-disp = x.XOpenDisplay( None )
-if not disp: quit( "Can't open default display!" )
-root_window = XWindow.root( disp )
+def enable_events( win ):
+	win.select_input( EventMask )
 
-# Get sublime text windows:
-top_windows = root_window.client_list()
-
-if not top_windows: q( "Can't find top level windows")
-sublimes = list( filter( is_sublime, top_windows ) )
-for w in sublimes:
-	print( "window", w.win, "pid", w.pid(), "title", w.title() )
+def event_id( event ):
+	return win_map[XWindow( disp, event.window )]
 
 """
 Public API
 """
 
-class MoveEvent( MoveEventMeta ):
-	def run( self ):
-		# Register callbacks:
-		global sublimes
-		for w in sublimes: w.select_input( EventMask )
+def window_coordinates( _id ):
+	# Fetch window or quit if not available:
+	global win_map
+	win = find_key( win_map, _id )
+	if not win: return
 
+	# Get geometrics & pointer:
+	(wx, wy, ww, wh), root = win.geom()
+	(rx, ry, _, _), _ = root.geom()
+	cx, cy, _, _ = root.pointer()
+
+	# Quit if not within bounds:
+	if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
+
+	# Map (cx, cy) to space( win ):
+	return map_coordinates( rx, ry, wx, wy, cx, cy )
+
+def window_width( _id ):
+	global win_map
+	win = find_key( win_map, _id )
+	return win.geom()[0][2] if win else None
+
+def register_new_window( _id ):
+	global win_map
+	if find_key( win_map, _id ): return
+
+	# Get top level windows:
+	top_windows = root_window.client_list()
+	if not top_windows: return print( "Can't find top level windows" )
+
+	# Bind first non-registered window => _id.
+	for w in filter( is_sublime, top_windows ):
+		if w not in win_map:
+			print( "found", "window", w.win,
+					"pid", w.pid(), "title", w.title() )
+			# Register callbacks & bind:
+			enable_events( w )
+			win_map[w] = _id
+			return
+
+class MoveEvent( MoveEventMeta ):
+	def __init__( self ):
+		# For some reason X11 can't work with daemon threads:
+		super().__init__( False )
+
+	def run( self ):
 		# Using predicate to avoid copying events of no interest:
 		def event_predicate( d, event, a ):
 			e = event.contents
@@ -245,12 +311,11 @@ class MoveEvent( MoveEventMeta ):
 		pred = EventPredicate( event_predicate )
 
 		# Event pump:
-		atexit.register( self.stop )
 		while self.alive:
 			# Block, waiting for an event:
 			e = XEvent()
 			ref = byref( e )
-			x.XIfEvent( disp, ref, pred, None )
+			X11.XIfEvent( disp, ref, pred, None )
 
 			# Route event &
 			# Put event back, we are just passively snooping:
@@ -258,24 +323,36 @@ class MoveEvent( MoveEventMeta ):
 						if e.type == MotionNotify
 						else (LeaveWindowMask, self._leave))
 			fn( e )
-			x.XSendEvent( disp, e.xany.window, 0, mask, ref )
+			X11.XSendEvent( disp, e.xany.window, 0, mask, ref )
 
 	def _move( self, event ):
 		e = event.xmotion
-		_id = 1
-		self.move( _id, e.x, e.y )
+		self.move( event_id( e ), e.x, e.y )
 
 	def _leave( self, event ):
-		e = event.xcross
-		_id = 1
-		self.leave( _id )
+		self.leave( event_id( event.xcross ) )
 
 	def _stop( self ):
-		x.XCloseDisplay( disp )
+		X11.XCloseDisplay( disp )
 
 class Tracker( MoveEvent ):
 	def move( self, _id, x, y ): print( "move", _id, x, y )
 	def leave( self, _id ): print( "leave", _id )
+
+# Let's get things started in here:
+# Initialize X11: Threading, get Display & Root Window:
+if not X11.XInitThreads(): quit( "X11 doesn't support multithreading." )
+disp = X11.XOpenDisplay( None )
+if not disp: quit( "Can't open default display!" )
+root_window = XWindow.root( disp )
+win_map = {}
+
+
+register_new_window( 1 )
+print( window_width( 1 ) )
+print( window_coordinates( 1 ) )
+
+#quit()
 
 m = Tracker()
 m.start()
