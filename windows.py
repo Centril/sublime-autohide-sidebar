@@ -21,9 +21,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .base import MoveEventMeta
+from base import MoveEventMeta, find_key, map_coordinates
 
-import atexit
 from ctypes import *
 from ctypes.wintypes import BOOL, HWND, LONG, INT, WPARAM, LPARAM, DWORD
 [user32, kernel32, version, psapi, dwmapi] = [windll.user32, windll.kernel32, windll.version, windll.psapi, windll.dwmapi]
@@ -117,11 +116,6 @@ def metrics():
 	[l, t, w, h] = [user32.GetSystemMetrics( w ) for w in [76, 77, 78, 79]]
 	return [l, t, w - l, h + t]
 
-# Converts (x, y) from coordinates of system with
-# origin at (xf, yf) to one with origin at (xt - xf, yt - yf).
-def map_coordinates( xf, yf, xt, yt, x, y ):
-	return (x - (xt - xf), y - (yt - yf))
-
 def window_rect( hwnd ):
 	rect = RECT()
 	return rect if user32.GetWindowRect( hwnd, byref( rect ) ) else None
@@ -155,9 +149,6 @@ def handle_event( self, x, y ):
 	# Move!
 	self.move( window, x, y )
 	return window
-
-def find_key( _dict, needle ):
-	return next( (k for k, v in _dict.items() if v == needle), None )
 
 """
 Public API
@@ -210,7 +201,6 @@ class MoveEvent( MoveEventMeta ):
 		self.hook = user32.SetWindowsHookExA( WH_MOUSE_LL, cb, MODULE_HANDLE, 0 )
 
 		# Event pump:
-		atexit.register( self.stop )
 		while self.alive:
 			msg = user32.GetMessageW( None, 0, 0, 0 )
 			user32.TranslateMessage( byref( msg ) )
