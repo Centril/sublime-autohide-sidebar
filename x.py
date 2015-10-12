@@ -56,8 +56,8 @@ class XAnyEvent( Structure ):
 	_fields_ = [
 		('type', c_int),
 		('serial', c_ulong),
-		('send_event', Bool),
-		('display', DisplayPtr ),
+		('send_event', c_int),
+		('display', POINTER( c_int ) ),
 		('window', Window)
 	]
 
@@ -169,10 +169,11 @@ class XWindow( object ):
 
 	# Retrieves PID of a X11 window if possible:
 	def pid( self ):
-		with x_lock( self.disp ): 
+		with x_lock( self.disp ):
 			mbuf = lambda f, n: (pointer( c_ulong() ), int( f / BYTE_LONG ) * n)
 			r = self._property( XA_CARDINAL, "_NET_WM_PID", mbuf )
-			if not r: return print( "Can't get PID of window: ", win )
+			print( self.win, not r )#, r.contents.value )
+			if not r: return print( "Can't get PID of window: ", self.win )
 			return r.contents.value
 
 	# Retrieves title of X11 window if possible:
@@ -191,10 +192,13 @@ class XWindow( object ):
 
 # Checks if window is a sublime text window:
 def is_sublime( win ):
-	r = popen( "ps -p %s -c -o command" % win.pid() ).read().split()
+	pid = win.pid()
+	if not pid: return False
+	r = popen( "ps -p %s -c -o command" % pid ).read().split()
 	if len( r ) and "sublime_text" in r[-1]: return True
 	# Fallback approach:
-	return win.title().endswith( ' - Sublime Text' )
+	title = win.title()
+	return title.endswith( ' - Sublime Text' ) if title else False
 
 # Initialize X11: Threading, get Display & Root Window:
 if not x.XInitThreads(): quit( "X11 doesn't support multithreading." )
@@ -202,8 +206,13 @@ disp = x.XOpenDisplay( None )
 if not disp: quit( "Can't open default display!" )
 root_window = XWindow.root( disp )
 
+print( root_window.win )
+
 # Get sublime text windows:
 top_windows = root_window.client_list()
+
+print( [w.win for w in top_windows])
+
 if not top_windows: q( "Can't find top level windows")
 sublimes = list( filter( is_sublime, top_windows ) )
 for w in sublimes:
@@ -211,7 +220,7 @@ for w in sublimes:
 
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
-		#print("#1")
+		print("#1")
 		# Register callbacks:
 		global sublimes
 		for w in sublimes: w.select_input( PointerMotionMask )
