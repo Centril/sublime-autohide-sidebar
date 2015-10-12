@@ -39,14 +39,10 @@ def lib( l ):
 x, libc = map( lib, ["X11", "c"] )
 
 # Typedefs:
-class Display( Structure ):
-	_fields_ = []
-
 Bool = c_int
 Time = c_ulong
 Atom = c_ulong
-#Display = c_int
-DisplayPtr = c_void_p#POINTER( Display )
+DisplayPtr = c_void_p
 Window = c_ulong
 WindowPtr = POINTER( Window )
 XPointer = c_char_p
@@ -61,25 +57,22 @@ class XAnyEvent( Structure ):
 		('window', Window)
 	]
 
+XEventCommon = [
+	('root', Window),
+	('subwindow', Window),
+	('time', Time),
+	('x', c_int), ('y', c_int),
+	('x_root', c_int), ('y_root', c_int)]
+
 class XMotionEvent( XAnyEvent ):
-	_fields_ = [
-		('root', Window),
-		('subwindow', Window),
-		('time', Time),
-		('x', c_int), ('y', c_int),
-		('x_root', c_int), ('y_root', c_int),
+	_fields_ = XEventCommon + [
 		('state', c_uint),
 		('is_hint', c_char),
 		('same_screen', Bool)
 	]
 
 class XCrossingEvent( XAnyEvent ):
-	_fields_ = [
-		('root', Window),
-		('subwindow', Window),
-		('time', Time),
-		('x', c_int), ('y', c_int),
-		('x_root', c_int), ('y_root', c_int),
+	_fields_ = XEventCommon + [
 		('mode', c_int),
 		('detail', c_int),
 		('same_screen', Bool),
@@ -131,6 +124,13 @@ class XWindow( object ):
 	def __init__( self, disp, win ):
 		self.disp = disp
 		self.win = win
+
+	def __eq__( self, rhs ):
+		return isinstance( rhs, self.__class__) and self.win == rhs.win
+	def __ne__( self, rhs ):
+		return not self.__eq__( rhs )
+	def __hash__( self ):
+		return hash( self.win )
 
 	# Returns root window:
 	def root( disp ):
@@ -228,6 +228,10 @@ sublimes = list( filter( is_sublime, top_windows ) )
 for w in sublimes:
 	print( "window", w.win, "pid", w.pid(), "title", w.title() )
 
+"""
+Public API
+"""
+
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
 		# Register callbacks:
@@ -258,18 +262,20 @@ class MoveEvent( MoveEventMeta ):
 
 	def _move( self, event ):
 		e = event.xmotion
-		print( "Move!", e )
+		_id = 1
+		self.move( _id, e.x, e.y )
 
 	def _leave( self, event ):
 		e = event.xcross
-		print( "Leave!", e )
+		_id = 1
+		self.leave( _id )
 
 	def _stop( self ):
-		print( "closing")
 		x.XCloseDisplay( disp )
 
-m = MoveEvent()
-m.start()
-#m.run()
+class Tracker( MoveEvent ):
+	def move( self, _id, x, y ): print( "move", _id, x, y )
+	def leave( self, _id ): print( "leave", _id )
 
-#x.XCloseDisplay( disp )
+m = Tracker()
+m.start()
