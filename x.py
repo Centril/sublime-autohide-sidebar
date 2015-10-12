@@ -61,13 +61,8 @@ class XAnyEvent( Structure ):
 		('window', Window)
 	]
 
-class XMotionEvent( Structure ):
+class XMotionEvent( XAnyEvent ):
 	_fields_ = [
-		('type', c_int),
-		('serial', c_ulong),
-		('send_event', Bool),
-		('display', DisplayPtr ),
-		('window', Window),
 		('root', Window),
 		('subwindow', Window),
 		('time', Time),
@@ -78,13 +73,8 @@ class XMotionEvent( Structure ):
 		('same_screen', Bool)
 	]
 
-class XCrossingEvent( Structure ):
+class XCrossingEvent( XAnyEvent ):
 	_fields_ = [
-		('type', c_int),
-		('serial', c_ulong),
-		('send_event', Bool),
-		('display', DisplayPtr ),
-		('window', Window),
 		('root', Window),
 		('subwindow', Window),
 		('time', Time),
@@ -118,11 +108,9 @@ Success = 0
 
 # Constants: Motion & Leave:
 MotionNotify = 6
-EnterNotify = 7
 LeaveNotify	= 8
 NotifyList = [MotionNotify, LeaveNotify]
 PointerMotionMask = (1 << 6)
-EnterWindowMask = (1 << 4)
 LeaveWindowMask	= (1 << 5)
 EventMask = PointerMotionMask | LeaveWindowMask
 
@@ -247,20 +235,26 @@ class MoveEvent( MoveEventMeta ):
 		for w in sublimes: w.select_input( EventMask )
 
 		# Using predicate to avoid copying events of no interest:
-		pred = EventPredicate( lambda d, e, a: e.contents.type in NotifyList )
+		def event_predicate( d, event, a ):
+			e = event.contents
+			return e.type in NotifyList and not e.xany.send_event
+		pred = EventPredicate( event_predicate )
 
 		# Event pump:
 		atexit.register( self.stop )
 		while self.alive:
 			# Block, waiting for an event:
 			e = XEvent()
-			x.XIfEvent( disp, byref( e ), pred, None )
+			ref = byref( e )
+			x.XIfEvent( disp, ref, pred, None )
 
-			# Route event:
-			(self._move if e.type == MotionNotify else self._leave)( e )
-
+			# Route event &
 			# Put event back, we are just passively snooping:
-			x.XSendEvent( disp, e.xany.window, 0, e.type, byref( e ) )
+			mask, fn = ((PointerMotionMask, self._move)
+						if e.type == MotionNotify
+						else (LeaveWindowMask, self._leave))
+			fn( e )
+			x.XSendEvent( disp, e.xany.window, 0, mask, ref )
 
 	def _move( self, event ):
 		e = event.xmotion
