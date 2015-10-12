@@ -22,11 +22,27 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from threading import Thread
+import atexit
 
+"""
+Utils:
+"""
+
+def find_key( _dict, needle ):
+	return next( (k for k, v in _dict.items() if v == needle), None )
+
+# Converts (x, y) from coordinates of system with
+# origin at (xf, yf) to one with origin at (xt - xf, yt - yf).
+def map_coordinates( xf, yf, xt, yt, x, y ):
+	return (x - (xt - xf), y - (yt - yf))
+
+"""
+Move driver:
+"""
 class MoveEventMeta( Thread ):
-	def __init__( self ):
+	def __init__( self, daemon = True ):
 		Thread.__init__( self )
-		self.daemon = True
+		self.daemon = daemon
 		self.alive = False
 
 	def __del__( self ):
@@ -34,6 +50,7 @@ class MoveEventMeta( Thread ):
 
 	def start( self ):
 		self.alive = True
+		atexit.register( self.stop )
 		Thread.start( self )
 
 	def stop( self ):
