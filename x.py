@@ -46,7 +46,7 @@ Bool = c_int
 Time = c_ulong
 Atom = c_ulong
 #Display = c_int
-DisplayPtr = POINTER( Display )
+DisplayPtr = c_void_p#POINTER( Display )
 Window = c_ulong
 WindowPtr = POINTER( Window )
 XPointer = c_char_p
@@ -56,8 +56,8 @@ class XAnyEvent( Structure ):
 	_fields_ = [
 		('type', c_int),
 		('serial', c_ulong),
-		('send_event', c_int),
-		('display', POINTER( c_int ) ),
+		('send_event', Bool),
+		('display', DisplayPtr ),
 		('window', Window)
 	]
 
@@ -78,11 +78,32 @@ class XMotionEvent( Structure ):
 		('same_screen', Bool)
 	]
 
+class XCrossingEvent( Structure ):
+	_fields_ = [
+		('type', c_int),
+		('serial', c_ulong),
+		('send_event', Bool),
+		('display', DisplayPtr ),
+		('window', Window),
+		('root', Window),
+		('subwindow', Window),
+		('time', Time),
+		('x', c_int), ('y', c_int),
+		('x_root', c_int), ('y_root', c_int),
+		('mode', c_int),
+		('detail', c_int),
+		('same_screen', Bool),
+		('focus', Bool),
+		('state', c_uint),
+	]
+
 class XEvent( Union ):
 	_fields_ = [
 		('type', c_int),
 		('xany', XAnyEvent),
-		('xmotion', XMotionEvent)
+		('xmotion', XMotionEvent),
+		('xcross', XCrossingEvent),
+		('pad', c_long * 24),
 	]
 
 EventPredicate = CFUNCTYPE( Bool, DisplayPtr, POINTER( XEvent ), XPointer )
@@ -95,9 +116,15 @@ XA_WINDOW = 33
 XA_STRING = 31
 Success = 0
 
-# Constants:
+# Constants: Motion & Leave:
 MotionNotify = 6
+EnterNotify = 7
+LeaveNotify	= 8
+NotifyList = [MotionNotify, LeaveNotify]
 PointerMotionMask = (1 << 6)
+EnterWindowMask = (1 << 4)
+LeaveWindowMask	= (1 << 5)
+EventMask = PointerMotionMask | LeaveWindowMask
 
 # Returns atom identifier associated with specified prop string:
 def intern_atom( disp, prop ):
@@ -217,21 +244,31 @@ class MoveEvent( MoveEventMeta ):
 	def run( self ):
 		# Register callbacks:
 		global sublimes
-		for w in sublimes: w.select_input( PointerMotionMask )
+		for w in sublimes: w.select_input( EventMask )
 
-		def motion_predicate( d, e, a ):
-			return e.contents.type == MotionNotify
-		pred = EventPredicate( motion_predicate )
+		# Using predicate to avoid copying events of no interest:
+		pred = EventPredicate( lambda d, e, a: e.contents.type in NotifyList )
 
 		# Event pump:
 		atexit.register( self.stop )
-		event = XEvent()
 		while self.alive:
-			print( "#1")
-			x.XPeekIfEvent( disp, byref( event ), pred, None )
-			print( event )
-			print( "#2 type", event.type )
-			print( "#3" )
+			# Block, waiting for an event:
+			e = XEvent()
+			x.XIfEvent( disp, byref( e ), pred, None )
+
+			# Route event:
+			(self._move if e.type == MotionNotify else self._leave)( e )
+
+			# Put event back, we are just passively snooping:
+			x.XSendEvent( disp, e.xany.window, 0, e.type, byref( e ) )
+
+	def _move( self, event ):
+		e = event.xmotion
+		print( "Move!", e )
+
+	def _leave( self, event ):
+		e = event.xcross
+		print( "Leave!", e )
 
 	def _stop( self ):
 		print( "closing")
