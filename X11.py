@@ -335,10 +335,6 @@ class MoveEvent( MoveEventMeta ):
 	def _stop( self ):
 		X11.XCloseDisplay( disp )
 
-class Tracker( MoveEvent ):
-	def move( self, _id, x, y ): print( "move", _id, x, y )
-	def leave( self, _id ): print( "leave", _id )
-
 # Let's get things started in here:
 # Initialize X11: Threading, get Display & Root Window:
 if not X11.XInitThreads(): quit( "X11 doesn't support multithreading." )
@@ -346,13 +342,3 @@ disp = X11.XOpenDisplay( None )
 if not disp: quit( "Can't open default display!" )
 root_window = XWindow.root( disp )
 win_map = {}
-
-
-register_new_window( 1 )
-print( window_width( 1 ) )
-print( window_coordinates( 1 ) )
-
-#quit()
-
-m = Tracker()
-m.start()
