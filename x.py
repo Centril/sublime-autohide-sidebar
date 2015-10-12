@@ -172,7 +172,6 @@ class XWindow( object ):
 		with x_lock( self.disp ):
 			mbuf = lambda f, n: (pointer( c_ulong() ), int( f / BYTE_LONG ) * n)
 			r = self._property( XA_CARDINAL, "_NET_WM_PID", mbuf )
-			print( self.win, not r )#, r.contents.value )
 			if not r: return print( "Can't get PID of window: ", self.win )
 			return r.contents.value
 
@@ -206,12 +205,8 @@ disp = x.XOpenDisplay( None )
 if not disp: quit( "Can't open default display!" )
 root_window = XWindow.root( disp )
 
-print( root_window.win )
-
 # Get sublime text windows:
 top_windows = root_window.client_list()
-
-print( [w.win for w in top_windows])
 
 if not top_windows: q( "Can't find top level windows")
 sublimes = list( filter( is_sublime, top_windows ) )
@@ -220,7 +215,6 @@ for w in sublimes:
 
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
-		print("#1")
 		# Register callbacks:
 		global sublimes
 		for w in sublimes: w.select_input( PointerMotionMask )
