@@ -42,13 +42,8 @@ from .counter import Counter
 #
 # Cross platform mouse movement event handler 
 #
-import sys
-if sys.platform == 'darwin': from .mac\
-	import MoveEvent, register_new_window, window_coordinates, window_width
-elif sys.platform == 'win32': from .windows\
-	import MoveEvent, register_new_window, window_coordinates, window_width
-else: from .x11\
-	import MoveEvent, register_new_window, window_coordinates, window_width
+from .driver import MoveEvent,\
+					register_new_window, window_coordinates, window_width
 
 #
 # Constants:
