@@ -262,6 +262,10 @@ def is_sublime( win ):
 	title = win.title()
 	return title.endswith( ' - Sublime Text' ) if title else False
 
+"""
+Move event logic:
+"""
+
 class MoveEvent( MoveEventMeta ):
 	def __init__( self, driver, move, leave ):
 		# For some reason X11 can't work with daemon threads:

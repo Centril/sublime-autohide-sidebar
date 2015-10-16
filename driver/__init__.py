@@ -29,7 +29,6 @@ if sys.platform == 'darwin':
 	from .mac import MoveEvent,\
 		driver_load, register_new_window, window_coordinates, window_width
 elif sys.platform == 'win32':
-	from .windows import MoveEvent,\
-		driver_load, register_new_window, window_coordinates, window_width
+	from .windows import Driver
 else:
 	from .X11 import Driver

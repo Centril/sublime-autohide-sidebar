@@ -21,7 +21,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .base import MoveEventMeta, find_key, map_coordinates
+from .base import DriverMeta, MoveEventMeta, find_key, map_coordinates
 
 from ctypes import *
 from ctypes.wintypes import BOOL, HWND, LONG, INT, WPARAM, LPARAM, DWORD
@@ -121,8 +121,7 @@ def window_rect( hwnd ):
 	return rect if user32.GetWindowRect( hwnd, byref( rect ) ) else None
 
 # Get window and window mapped coordinates at cursor position:
-def coordinates_and_hwnd():
-	global win_map
+def coordinates_and_hwnd( win_map ):
 	# Get coordinates and window:
 	p = POINT()
 	user32.GetPhysicalCursorPos( byref( p ) )
@@ -132,67 +131,31 @@ def coordinates_and_hwnd():
 
 	# Map cursor pos to window coordinates:
 	rect = window_rect( hwnd )
-	return (map_coordinates( 0, 0, rect.l, rect.t, x, y ), win_map[hwnd]) if rect else None
-#	DPI scaling issues? the outcommented code works fine on non-scaled, works bad on scaled.
-#	if dwmapi.DwmGetWindowAttribute( hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref( rect ), sizeof( RECT ) ):
+	return ((map_coordinates( 0, 0, rect.l, rect.t, x, y ), win_map[hwnd])
+			if rect else None)
+#	DPI scaling issues? the outcommented code works fine
+#	on non-scaled, works bad on scaled.
+#	if dwmapi.DwmGetWindowAttribute( hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,\
+#		byref( rect ), sizeof( RECT ) ):
 #		return
-
-def handle_event( self, x, y ):
-	r = coordinates_and_hwnd()
-	if not r: return
-	(x, y), window = r
-
-	# Add to stack of entered_window:
-	global entered_windows
-	if window not in entered_windows: entered_windows.append( window )
-
-	# Move!
-	self.move( window, x, y )
-	return window
-
-"""
-Public API
-"""
-
-def window_width( _id ):
-	global win_map
-	rect = window_rect( find_key( win_map, _id ) )
-	return rect.r - rect.l if rect else None
-
-def window_coordinates( _id ):
-	r = coordinates_and_hwnd()
-	if not r: return
-	xy, window = r
-	return xy if window == _id else None
-
-def register_new_window( _id ):
-	global win_map
-	windows = win_map.values()
-	if _id in windows: return
-
-	def cb( hwnd, lParam ):
-		if (hwnd in win_map) or (not is_sublime( hwnd )): return 1
-		win_map[hwnd] = _id
-		return 0
-
-	user32.EnumWindows( EnumWindowsProc( cb ), None )
 
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
 		def py_cb( nCode, wParam, lParam ):
-			global entered_windows
 			if nCode >= 0 and wParam == WM_MOUSEMOVE:
 				# Handle move events:
 				[l, t, r, b] = metrics()
 				[x, y] = [lParam.contents.pt.x, lParam.contents.pt.y]
-				window = handle_event( self, max( l, min( r, x ) ), max( t, min( b, y ) ) )
+				x, y = max( l, min( r, x ) ), max( t, min( b, y ) )
+				window = self.handle_event( x, y )
 
 				# Handle leave events:
-				leaving = entered_windows[:]
-				entered_windows = []
+				leaving = self.driver.entered_windows[:]
+				ew = []
 				for w in leaving:
 					if w != window: self.leave( w )
-					else: entered_windows.append( w )
+					else: ew.append( w )
+				self.driver.entered_windows = ew
 
 			return user32.CallNextHookEx( None, nCode, wParam, lParam )
 
@@ -206,5 +169,51 @@ class MoveEvent( MoveEventMeta ):
 			user32.TranslateMessage( byref( msg ) )
 			user32.DispatchMessageW( byref( msg ) )
 
-	def _stop( self ):
+	def handle_event( self, x, y ):
+		r = coordinates_and_hwnd( self.driver.win_map )
+		if not r: return
+		(x, y), window = r
+
+		# Add to stack of entered_window:
+		ew = self.driver.entered_windows
+		if window not in ew: ew.append( window )
+
+		# Move!
+		self.move( window, x, y )
+		return window
+
+	def _stopx( self ):
 		user32.UnhookWindowsHookEx( self.hook )
+
+"""
+Public API
+"""
+
+class Driver( DriverMeta ):
+	def __init__( self ):
+		self.win_map = {}
+		self.entered_windows = {}
+
+	def window_width( self, _id ):
+		rect = window_rect( find_key( self.win_map, _id ) )
+		return rect.r - rect.l if rect else None
+
+	def window_coordinates( self, _id ):
+		r = coordinates_and_hwnd( self.win_map )
+		if not r: return
+		xy, window = r
+		return xy if window == _id else None
+
+	def register_new_window( _id ):
+		windows = self.win_map.values()
+		if _id in windows: return
+
+		def cb( hwnd, lParam ):
+			if (hwnd in self.win_map) or (not is_sublime( hwnd )): return 1
+			self.win_map[hwnd] = _id
+			return 0
+
+		user32.EnumWindows( EnumWindowsProc( cb ), None )
+
+	def tracker( self, move, leave ):
+		return MoveEvent( self, move, leave )
