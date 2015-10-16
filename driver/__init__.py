@@ -26,8 +26,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 import sys
 if sys.platform == 'darwin':
-	from .mac import MoveEvent,\
-		driver_load, register_new_window, window_coordinates, window_width
+	from .mac import Driver
 elif sys.platform == 'win32':
 	from .windows import Driver
 else:
