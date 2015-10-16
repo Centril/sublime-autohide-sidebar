@@ -272,11 +272,15 @@ class MoveEvent( MoveEventMeta ):
 		super().__init__( driver, move, leave, False )
 
 	def run( self ):
+		def check_client_message( e ):
+			return e.data.value.encode() == "sb-autohide-sidebar"
+
 		# Using predicate to avoid copying events of no interest:
 		def event_predicate( d, event, a ):
 			e = event.contents
-			b = e.type in NotifyList and not e.xany.send_event
-			return b or (e.type == ClientMessage)
+			inl = e.type in NotifyList and not e.xany.send_event
+			cm = e.type == ClientMessage and check_client_message( e.xcm )
+			return inl or cm
 		pred = EventPredicate( event_predicate )
 
 		while self.alive:
@@ -317,6 +321,7 @@ class MoveEvent( MoveEventMeta ):
 			ev.display = self.driver.disp
 			ev.win = win
 			ev.format = 8
+			ev.data = create_string_buffer( b"sb-autohide-sidebar", 20 )
 			X11.XSendEvent( self.driver.disp, win, 0,
 				SubstructureNotifyMask, byref( ev ) )
 			X11.XFlush( self.driver.disp )
