@@ -42,25 +42,29 @@ from .counter import Counter
 #
 # Cross platform mouse movement event handler 
 #
-from .driver import MoveEvent,\
-					register_new_window, window_coordinates, window_width
+from .driver import Driver
 
 #
 # Constants:
 #
 HIDE_DEFAULT_X = 450
 
+def hs_padding_x():
+	global settings
+	return settings.get( 'hide_show_padding_x' )
+
 #
 # Per window wrapper:
 #
 class Wrapper( object ):
-	def __init__( self, _id, window ):
-		self.id = _id
+	def __init__( self, window ):
+		global D
+		self.id = window.id()
 		self.window = window
 		self.toggled = False
 		self.suspended = False
 
-		register_new_window( _id )
+		D.register_new_window( self.id )
 		if self.is_sidebar_open(): self._toggle()
 
 	# Thanks https://github.com/titoBouzout
@@ -93,15 +97,13 @@ class Wrapper( object ):
 
 	# Given an x coordinate: whether or not sidebar should hide:
 	def should_hide( self, x ):
-		global settings
-		w = window_width( self.id ) or HIDE_DEFAULT_X
+		global D
+		w = D.window_width( self.id ) or HIDE_DEFAULT_X
 		w2 = self.window.active_view().viewport_extent()[0] or 0
-		return x >= (w - w2 - settings.get( 'hide_show_padding_x' ) * 2)
+		return x >= (w - w2 - hs_padding_x() * 2)
 
 	# Given an x coordinate: whether or not sidebar should show:
-	def should_show( self, x ):
-		global settings
-		return x < settings.get( 'hide_show_padding_x' )
+	def should_show( self, x ): return x < hs_padding_x()
 
 	# Toggles side bar if pred is fulfilled and flips toggled state:
 	def win_if_toggle( self, pred ):
@@ -112,8 +114,9 @@ class Wrapper( object ):
 
 	# Hides sidebar if it should be hidden, or shows if it should:
 	def hide_or_show( self ):
+		global D
 		if self.suspended: return
-		r = window_coordinates( self.id )
+		r = D.window_coordinates( self.id )
 		self.toggled = (not self.should_hide( r[0] )
 						if self.is_sidebar_open()
 						else self.should_show( r[0] ) )\
@@ -131,7 +134,9 @@ class Wrapper( object ):
 #
 # Making and getting wrappers:
 #
-wrappers = {}
+def reset_wrappers():
+	global wrappers
+	wrappers = {}
 
 # Returns a wrapper for _id:
 def wrapper( _id ):
@@ -139,16 +144,17 @@ def wrapper( _id ):
 	return wrappers[_id or active_window().id()]
 
 # Registers a new window:
-def register_new( _id, window ):
+def register_new( window ):
 	global wrappers
-	w = Wrapper( _id, window )
-	wrappers[_id] = w
+	w = Wrapper( window )
+	wrappers[w.id] = w
 	return w
 
 # Returns the wrapper, registers it if not:
-def wrapper_or_register( _id, window ):
+def wrapper_or_register( window ):
 	global wrappers
-	return wrapper( _id ) if _id in wrappers else register_new( _id, window )
+	_id = window.id()
+	return wrapper( _id ) if _id in wrappers else register_new( window )
 
 #
 # Plugin listeners & loading:
@@ -170,33 +176,36 @@ class Listener( EventListener ):
 
 	# Wait: last on_load in sequence => make or get wrapper and hide/show it.
 	def on_load( self, view ):
-		window = view.window()
-		_id = window.id()
-
-		c = on_load_counter( _id )
+		w = view.window()
+		c = on_load_counter( w.id() )
 		c.inc()
 
 		# Handle on_load, get the appropriate wrapper or make one:
 		set_timeout_async( lambda: not c.dec() and
-			wrapper_or_register( _id, window ).hide_or_show(), 0 )
-
-class Tracker( MoveEvent ):
-	def move( self, _id, x, y ): wrapper( _id ).move( x )
-	def leave( self, _id ): wrapper( _id ).leave()
-
-T = Tracker()
+			wrapper_or_register( w ).hide_or_show(), 0 )
 
 def plugin_loaded():
+	print( "pre-load-settings")
 	# Load settings:
 	global settings
 	settings = load_settings( 'sublime-autohide-sidebar.sublime-settings' )
+	print( "post-load-settings" )
 
 	# Hide ALL sidebars:
-	for w in windows(): register_new( w.id(), w )
+	global D, T
+	D = Driver()
+	reset_wrappers()
+	for w in windows(): register_new( w )
 
 	# Start receiving events:
+	def move( _id, x, y ): wrapper( _id ).move( x )
+	def leave( _id ): wrapper( _id ).leave()
+	T = D.tracker( move, leave )
 	T.start()
+	print( "post-T.start()")
 
 def plugin_unloaded():
+	print("stop#1")
 	# Stop receiving events:
-	T.stop()
+	global D, T
+	T.stopx()

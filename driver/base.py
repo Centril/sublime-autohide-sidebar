@@ -40,32 +40,32 @@ def map_coordinates( xf, yf, xt, yt, x, y ):
 Move driver:
 """
 class MoveEventMeta( Thread ):
-	def __init__( self, daemon = True ):
+	def __init__( self, driver, move, leave, daemon = True ):
 		Thread.__init__( self )
 		self.daemon = daemon
 		self.alive = False
-
-	def __del__( self ):
-		self.stop()
+		self.driver = driver
+		self.move = move
+		self.leave = leave
 
 	def start( self ):
 		self.alive = True
-		atexit.register( self.stop )
 		Thread.start( self )
 
-	def stop( self ):
+	def stopx( self ):
 		if self.alive:
 			self.alive = False
-			self._stop()
+			self._stopx()
 
-	def _stop( self ):
-		pass
+	def _stopx( self ): pass
+	def run( self ): pass
 
-	def run( self ):
-		pass
-
-	def move( self, _id, x, y ):
-		pass
-
-	def leave( self, _id ):
-		pass
+"""
+Driver:
+"""
+class DriverMeta( object ):
+	def __init__( self ): pass
+	def window_coordinates( self, _id ): pass
+	def window_width( self, _id ): pass
+	def register_new_window( self, _id ): pass
+	def tracker( self, move, leave ): pass

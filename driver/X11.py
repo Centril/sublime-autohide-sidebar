@@ -21,9 +21,10 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .base import MoveEventMeta, find_key, map_coordinates
+from .base import DriverMeta, MoveEventMeta, find_key, map_coordinates
 
 # Imports:
+from threading import Lock
 from contextlib import contextmanager
 from os import popen
 from ctypes import *
@@ -37,7 +38,9 @@ def lib( l ):
 # Get Xlib:
 X11 = lib( "X11" )
 
-# Typedefs:
+"""
+Typedefs:
+"""
 class Display( Structure): pass
 
 Bool = c_int
@@ -55,6 +58,13 @@ class XAnyEvent( Structure ):
 		('send_event', Bool),
 		('display', DisplayPtr ),
 		('window', Window)
+	]
+
+class XClientMessageEvent( XAnyEvent ):
+	_fields_ = [
+		('message_type', Atom),
+		('format', c_int),
+		('data', (c_char * 20))
 	]
 
 XEventCommon = [
@@ -86,6 +96,7 @@ class XEvent( Union ):
 		('xany', XAnyEvent),
 		('xmotion', XMotionEvent),
 		('xcross', XCrossingEvent),
+		('xcm', XClientMessageEvent),
 		('pad', c_long * 24),
 	]
 
@@ -103,10 +114,13 @@ Success = 0
 # Constants: Motion & Leave:
 MotionNotify = 6
 LeaveNotify	= 8
+ClientMessage = 33
 NotifyList = [MotionNotify, LeaveNotify]
+NoEventMask = 0
 PointerMotionMask = (1 << 6)
 LeaveWindowMask	= (1 << 5)
-EventMask = PointerMotionMask | LeaveWindowMask
+SubstructureNotifyMask = (1 << 19) 
+EventMask = PointerMotionMask | LeaveWindowMask | SubstructureNotifyMask
 
 # Returns atom identifier associated with specified prop string:
 def intern_atom( disp, prop ):
@@ -248,74 +262,26 @@ def is_sublime( win ):
 	title = win.title()
 	return title.endswith( ' - Sublime Text' ) if title else False
 
-def enable_events( win ):
-	win.select_input( EventMask )
-
-def event_id( event ):
-	return win_map[XWindow( disp, event.window )]
-
-"""
-Public API
-"""
-
-def window_coordinates( _id ):
-	# Fetch window or quit if not available:
-	global win_map
-	win = find_key( win_map, _id )
-	if not win: return
-
-	# Get geometrics & pointer:
-	(wx, wy, ww, wh), root = win.geom()
-	(rx, ry, _, _), _ = root.geom()
-	cx, cy, _, _ = root.pointer()
-
-	# Quit if not within bounds:
-	if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
-
-	# Map (cx, cy) to space( win ):
-	return map_coordinates( rx, ry, wx, wy, cx, cy )
-
-def window_width( _id ):
-	global win_map
-	win = find_key( win_map, _id )
-	return win.geom()[0][2] if win else None
-
-def register_new_window( _id ):
-	global win_map
-	if find_key( win_map, _id ): return
-
-	# Get top level windows:
-	top_windows = root_window.client_list()
-	if not top_windows: return print( "Can't find top level windows" )
-
-	# Bind first non-registered window => _id.
-	for w in filter( is_sublime, top_windows ):
-		if w not in win_map:
-			print( "found", "window", w.win,
-					"pid", w.pid(), "title", w.title() )
-			# Register callbacks & bind:
-			enable_events( w )
-			win_map[w] = _id
-			return
-
 class MoveEvent( MoveEventMeta ):
-	def __init__( self ):
+	def __init__( self, driver, move, leave ):
 		# For some reason X11 can't work with daemon threads:
-		super().__init__( False )
+		super().__init__( driver, move, leave, False )
 
 	def run( self ):
 		# Using predicate to avoid copying events of no interest:
 		def event_predicate( d, event, a ):
 			e = event.contents
-			return e.type in NotifyList and not e.xany.send_event
+			b = e.type in NotifyList and not e.xany.send_event
+			return b or (e.type == ClientMessage)
 		pred = EventPredicate( event_predicate )
 
-		# Event pump:
 		while self.alive:
 			# Block, waiting for an event:
 			e = XEvent()
 			ref = byref( e )
-			X11.XIfEvent( disp, ref, pred, None )
+			X11.XIfEvent( self.driver.disp, ref, pred, None )
+
+			if e.type == ClientMessage: break
 
 			# Route event &
 			# Put event back, we are just passively snooping:
@@ -323,22 +289,84 @@ class MoveEvent( MoveEventMeta ):
 						if e.type == MotionNotify
 						else (LeaveWindowMask, self._leave))
 			fn( e )
-			X11.XSendEvent( disp, e.xany.window, 0, mask, ref )
+
+			with x_lock( self.driver.disp ):
+				X11.XSendEvent( self.driver.disp, e.xany.window, 0, mask, ref )
+
+		X11.XCloseDisplay( self.driver.disp )
+
+	def _event_id( self, event ):
+		return self.driver.win_map[XWindow( self.driver.disp, event.window )]
 
 	def _move( self, event ):
 		e = event.xmotion
-		self.move( event_id( e ), e.x, e.y )
+		self.move( self._event_id( e ), e.x, e.y )
 
 	def _leave( self, event ):
-		self.leave( event_id( event.xcross ) )
+		self.leave( self._event_id( event.xcross ) )
 
-	def _stop( self ):
-		X11.XCloseDisplay( disp )
+	def _stopx( self ):
+		with x_lock( self.driver.disp ):
+			print( "_stopx()" )
+			win = next( iter( self.driver.win_map ) ).win
+			ev = XClientMessageEvent()
+			ev.type = ClientMessage
+			ev.display = self.driver.disp
+			ev.win = win
+			ev.format = 8
+			X11.XSendEvent( self.driver.disp, win, 0,
+				SubstructureNotifyMask, byref( ev ) )
+			X11.XFlush( self.driver.disp )
 
-# Let's get things started in here:
-# Initialize X11: Threading, get Display & Root Window:
-if not X11.XInitThreads(): quit( "X11 doesn't support multithreading." )
-disp = X11.XOpenDisplay( None )
-if not disp: quit( "Can't open default display!" )
-root_window = XWindow.root( disp )
-win_map = {}
+"""
+Public API:
+"""
+
+class Driver( DriverMeta ):
+	def __init__( self ):
+		# Let's get things started in here:
+		# Create win_map, Initialize X11: Threading, get Display:
+		self.win_map = {}
+	#	if "disp" in globals(): return print( "X11 is already loaded!" )
+		if not X11.XInitThreads(): quit( "X11 doesn't support multithreading." )
+		self.disp = X11.XOpenDisplay( None )
+
+	def window_coordinates( self, _id ):
+		# Fetch window or quit if not available:
+		win = find_key( self.win_map, _id )
+		if not win: return
+
+		# Get geometrics & pointer:
+		(wx, wy, ww, wh), root = win.geom()
+		(rx, ry, _, _), _ = root.geom()
+		cx, cy, _, _ = root.pointer()
+
+		# Quit if not within bounds:
+		if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
+
+		# Map (cx, cy) to space( win ):
+		return map_coordinates( rx, ry, wx, wy, cx, cy )
+
+	def window_width( self, _id ):
+		win = find_key( self.win_map, _id )
+		return win.geom()[0][2] if win else None
+
+	def register_new_window( self, _id ):
+		if find_key( self.win_map, _id ): return
+
+		# Get top level windows:
+		top_windows = XWindow.root( self.disp ).client_list()
+		if not top_windows: return print( "Can't find top level windows" )
+
+		# Bind first non-registered window => _id.
+		for w in filter( is_sublime, top_windows ):
+			if w not in self.win_map:
+				print( "found", "window", w.win,
+						"pid", w.pid(), "title", w.title() )
+				# Register callbacks & bind:
+				w.select_input( EventMask )
+				self.win_map[w] = _id
+				return
+
+	def tracker( self, move, leave ):
+		return MoveEvent( self, move, leave )

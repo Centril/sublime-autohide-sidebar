@@ -27,10 +27,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import sys
 if sys.platform == 'darwin':
 	from .mac import MoveEvent,\
-		register_new_window, window_coordinates, window_width
+		driver_load, register_new_window, window_coordinates, window_width
 elif sys.platform == 'win32':
 	from .windows import MoveEvent,\
-		register_new_window, window_coordinates, window_width
+		driver_load, register_new_window, window_coordinates, window_width
 else:
-	from .X11 import MoveEvent,\
-		register_new_window, window_coordinates, window_width
+	from .X11 import Driver
