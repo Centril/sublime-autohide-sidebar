@@ -109,9 +109,6 @@ def is_sublime( hwnd ):
 Move event logic:
 """
 
-entered_windows = []
-win_map = {}
-
 def metrics():
 	[l, t, w, h] = [user32.GetSystemMetrics( w ) for w in [76, 77, 78, 79]]
 	return [l, t, w - l, h + t]
