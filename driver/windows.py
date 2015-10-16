@@ -189,7 +189,7 @@ Public API
 class Driver( DriverMeta ):
 	def __init__( self ):
 		self.win_map = {}
-		self.entered_windows = {}
+		self.entered_windows = []
 
 	def window_width( self, _id ):
 		rect = window_rect( find_key( self.win_map, _id ) )
@@ -201,7 +201,7 @@ class Driver( DriverMeta ):
 		xy, window = r
 		return xy if window == _id else None
 
-	def register_new_window( _id ):
+	def register_new_window( self, _id ):
 		windows = self.win_map.values()
 		if _id in windows: return
 
