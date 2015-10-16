@@ -311,7 +311,6 @@ class MoveEvent( MoveEventMeta ):
 
 	def _stopx( self ):
 		with x_lock( self.driver.disp ):
-			print( "_stopx()" )
 			win = next( iter( self.driver.win_map ) ).win
 			ev = XClientMessageEvent()
 			ev.type = ClientMessage
@@ -331,7 +330,6 @@ class Driver( DriverMeta ):
 		# Let's get things started in here:
 		# Create win_map, Initialize X11: Threading, get Display:
 		self.win_map = {}
-	#	if "disp" in globals(): return print( "X11 is already loaded!" )
 		if not X11.XInitThreads(): quit( "X11 doesn't support multithreading." )
 		self.disp = X11.XOpenDisplay( None )
 
@@ -365,8 +363,7 @@ class Driver( DriverMeta ):
 		# Bind first non-registered window => _id.
 		for w in filter( is_sublime, top_windows ):
 			if w not in self.win_map:
-				print( "found", "window", w.win,
-						"pid", w.pid(), "title", w.title() )
+				print( "window", w.win, "pid", w.pid(), "title", w.title() )
 				# Register callbacks & bind:
 				w.select_input( EventMask )
 				self.win_map[w] = _id
