@@ -51,6 +51,8 @@ CFDictionaryRef = CFTypeRef
 CFAllocatorRef = CFTypeRef
 CGWindowID = c_uint32
 CGWindowListOption = c_uint32
+CGEventRef = CFTypeRef
+CGEventSourceRef = CFTypeRef
 
 class CGPoint( Structure ):
 	_fields_ = [('_x', CGFloat), ('_y', CGFloat)]
@@ -81,7 +83,9 @@ list( starmap( fix_cfn, [
 		[CFDictionaryRef, POINTER( CGRect )]),
 	(Q.CFRelease, None, [CFTypeRef]),
 	(Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption]),
-	(Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef])
+	(Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef]),
+	(Q.CGEventCreate, CGEventRef, [CGEventSourceRef]),
+	(Q.CGEventGetLocation, CGPoint, [CGEventRef]) 
 ] ) )
 
 """
@@ -195,6 +199,12 @@ def single_window_dict( w_id ):
 		finally: Q.CFRelease( w_desc )
 	finally: Q.CFRelease( w_arr )
 
+def get_cursor_location():
+	event = Q.CGEventCreate( None )
+	try: loc = Q.CGEventGetLocation( event )
+	finally: Q.CFRelease( event )
+	return loc.tuple()
+
 """
 Move event logic:
 """
@@ -218,12 +228,29 @@ class Driver( DriverMeta ):
 		# Fetch window or quit if not available:
 		win = find_key( self.win_map, _id )
 		if not win: return
-		return None
+
+		# Get geometrics & pointer:
+		with single_window_dict( win ) as w:
+			(wx, wy, ww, wh) = w.bounds()
+
+		cx, cy = get_cursor_location()
+		print( cx, cy )
+
+		"""
+		(rx, ry, _, _), _ = root.geom()
+		cx, cy, _, _ = root.pointer()
+
+		# Quit if not within bounds:
+		if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
+
+		# Map (cx, cy) to space( win ):
+		return map_coordinates( rx, ry, wx, wy, cx, cy )
+		"""
 
 	def window_width( self, _id ):
-		win = find_key( self.win_map, _id )
-		if not win: return
-		with single_window_dict( win ) as ww: return ww.bounds()[2]
+		w_id = find_key( self.win_map, _id )
+		if not w_id: return
+		with single_window_dict( w_id ) as w: return w.bounds()[2]
 
 	def register_new_window( self, _id ):
 		if find_key( self.win_map, _id ): return
@@ -244,4 +271,6 @@ D = Driver()
 for _id in range( 1, 3 ): D.register_new_window( _id )
 print( D.win_map )
 
-for _id in range( 1, 3 ): print( D.window_width( _id ) )
+for _id in range( 1, 3 ):
+	print( D.window_width( _id ) )
+	print( D.window_coordinates( _id ) )
