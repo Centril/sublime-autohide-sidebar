@@ -1,3 +1,28 @@
+"""
+Autohide Sidebar
+or: sublime-autohide-sidebar
+
+A Sublime Text plugin that autohides the sidebar and shows
+it when the mouse hovers the edge of the editors window.
+
+Copyright (C) 2015, Mazdak Farrokhzad
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
+
+from driver.base import DriverMeta, MoveEventMeta, find_key, map_coordinates
+
 from os import popen
 from ctypes import *
 from ctypes.util import find_library
@@ -38,6 +63,10 @@ fix_cfn( Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, c_void_p] )
 fix_cfn( Q.CFRelease, None, [c_void_p] )
 fix_cfn( Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption] )
 
+"""
+ctypes helpers:
+"""
+
 # Converts a _FunPtr to c_void_p
 def fn_to_voidp( fn ): return c_void_pp.from_buffer( fn ).contents
 
@@ -53,36 +82,12 @@ def cfnumber_get( _type, _restype, _from ):
 	r = Q.CFNumberGetValue( _from, _type, byref( _to ) )
 	return _to
 
+# Returns contents of cfstring as a byte slice:
 def cfstring_get( ref ):
 	str_length = Q.CFStringGetLength( ref ) + 1
 	str_buf = create_string_buffer( str_length )
 	result = Q.CFStringGetCString( ref, str_buf, str_length, 0 )
 	return str_buf.value.decode( errors = 'ignore' )
-
-#class __CFString( Structure ): pass
-#class __CFArray( Structure ): pass
-#CFStringRef = POINTER( __CFString )
-#CFArrayRef = POINTER( __CFArray )
-
-"""
-Constants:
-"""
-kCGWindowListOptionAll = CGWindowListOption( 0 )
-kCGWindowListExcludeDesktopElements = CGWindowListOption( 1 << 4 )
-kCGNullWindowID = CGWindowID( 0 )
-kCGWindowNumber = fn_to_voidp( Q.kCGWindowNumber )
-kCGWindowName = fn_to_voidp( Q.kCGWindowName )
-kCGWindowOwnerName = fn_to_voidp( Q.kCGWindowOwnerName )
-kCGWindowOwnerPID = fn_to_voidp( Q.kCGWindowOwnerPID )
-kCGWindowLayer = fn_to_voidp( Q.kCGWindowLayer )
-
-kCFNumberSInt32Type = 3
-kCFNumberIntType = 9
-kCGWindowIDCFNumberType = kCFNumberSInt32Type
-
-"""
-Stuff:
-"""
 
 # View of CFDictionaryRef as a python dict (partial implementation):
 class CFDict( object ):
@@ -95,18 +100,40 @@ class CFDict( object ):
 	def __contains__( self, key ):
 		return Q.CFDictionaryContainsKey( self.data, key )
 
+"""
+Constants:
+"""
+kCGWindowListExcludeDesktopElements = CGWindowListOption( 1 << 4 )
+kCGNullWindowID = CGWindowID( 0 )
+kCGWindowNumber = fn_to_voidp( Q.kCGWindowNumber )
+kCGWindowName = fn_to_voidp( Q.kCGWindowName )
+kCGWindowOwnerPID = fn_to_voidp( Q.kCGWindowOwnerPID )
+kCGWindowLayer = fn_to_voidp( Q.kCGWindowLayer )
+
+kCFNumberSInt32Type = 3
+kCFNumberIntType = 9
+kCGWindowIDCFNumberType = kCFNumberSInt32Type
+
+"""
+sublime_windows:
+"""
+
+# Wrapper around CFDict from Q.CGWindowListCopyWindowInfo:
 class WinDict( object ):
 	def __init__( self, _dict ):
 		self.dict = CFDict( _dict )
 
 	def _get( self, key, type_id, to_type ):
-		return cfnumber_get( type_id, to_type, self.dict[key] )
+		return cfnumber_get( type_id, to_type, self.dict[key] ).value
 
 	def id( self ):
 		return self._get( kCGWindowNumber, kCGWindowIDCFNumberType, CGWindowID )
 
 	def pid( self ):
-		return self._get( kCGWindowOwnerPID, kCFNumberIntType, c_int ).value
+		return self._get( kCGWindowOwnerPID, kCFNumberIntType, c_int )
+
+	def level( self ):
+		return self._get( kCGWindowLayer, kCFNumberIntType, c_int )
 
 	def title( self ):
 		return (cfstring_get( self.dict[kCGWindowName] )
@@ -117,22 +144,67 @@ def is_sublime( win ):
 	pid = win.pid()
 	if not pid: return False
 	r = popen( "ps -p %s -c -o command" % pid ).read().strip().split( '\n' )
-	if not (r and "Sublime Text" in r[-1]): return False
-	if win.title(): return True
-	# Fallback approach:
-#	title = win.title()
-#	return title.endswith( ' - Sublime Text' ) if title else False
+	return r and "Sublime Text" in r[-1] and win.level() == 0 and win.title()
 
-def top_level():
+def sublime_windows():
 	windows = Q.CGWindowListCopyWindowInfo(
-		0, kCGNullWindowID )
+		kCGWindowListExcludeDesktopElements, kCGNullWindowID )
+
+	if not windows: quit( "Can't access CGWindows! ")
 
 	try:
 		for _win in cfarray( windows ):
 			w = WinDict( _win )
-			if not is_sublime( w ): continue
-			print( _win, w.id(), w.pid(), w.title() )
+			if is_sublime( w ): yield w
 	finally:
 		Q.CFRelease( windows )
 
-top_level()
+"""
+Move event logic:
+"""
+
+class MoveEvent( MoveEventMeta ):
+	def run( self ):
+		while self.alive: pass
+
+	def _stopx( self ):
+		pass
+
+"""
+Public API:
+"""
+
+class Driver( DriverMeta ):
+	def __init__( self ):
+		# Let's get things started in here:
+		# Create win_map:
+		self.win_map = {}
+
+	def window_coordinates( self, _id ):
+		# Fetch window or quit if not available:
+		win = find_key( self.win_map, _id )
+		if not win: return
+		return None
+
+	def window_width( self, _id ):
+		win = find_key( self.win_map, _id )
+		return None
+
+	def register_new_window( self, _id ):
+		if find_key( self.win_map, _id ): return
+
+		for w in sublime_windows():
+			w_id = w.id()
+			if w_id not in self.win_map:
+				print( "window", w_id, "pid", w.pid(), "title", w.title() )
+				self.win_map[w_id] = _id
+				return
+
+		return None
+
+	def tracker( self, move, leave ):
+		return MoveEvent( self, move, leave )
+
+D = Driver()
+for _id in range( 1, 3 ): D.register_new_window( _id )
+print( D.win_map )
