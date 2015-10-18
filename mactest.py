@@ -35,18 +35,30 @@ def lib( l ):
 Q = lib( "quartz" )
 
 """
-Typedefs & Functions:
+Typedefs, Functions, Structures:
 """
-c_void_pp = POINTER( c_void_p )
-
+is64bit = sizeof( c_void_p ) != 4
+class CFTypeRef( c_void_p ): pass
+CFTypeRefPtr = POINTER( CFTypeRef )
+CGFloat = c_double if is64bit else c_float
+CFIndex = c_long
+CFStringRef = CFTypeRef
+CFStringEncoding = c_uint32
+CFArrayRef = CFTypeRef
+CFDictionaryRef = CFTypeRef
+CFAllocatorRef = CFTypeRef
 CGWindowID = c_uint32
 CGWindowListOption = c_uint32
 
-CFIndex = c_long
-CFStringRef = c_void_p
-CFStringEncoding = c_uint32
-CFArrayRef = c_void_p
-CFDictionaryRef = c_void_p
+class CGPoint( Structure ):
+	_fields_ = [('_x', CGFloat), ('_y', CGFloat)]
+	def x( self ): return int( self._x )
+	def y( self ): return int( self._y )
+	def tuple( self ): return (self.x(), self.y())
+
+class CGRect( Structure ):
+	_fields_ = [('origin', CGPoint), ('size', CGPoint)]
+	def tuple( self ): return self.origin.tuple() + self.size.tuple()
 
 # Fixes the return and argument types of FFI function:
 def fix_cfn( fn, res, args ):
@@ -57,18 +69,26 @@ fix_cfn( Q.CFStringGetLength, CFIndex, [CFStringRef] )
 fix_cfn( Q.CFStringGetCString, c_bool,
 	[CFStringRef, c_char_p, CFIndex, CFStringEncoding] )
 fix_cfn( Q.CFArrayGetCount, CFIndex, [CFArrayRef] )
-fix_cfn( Q.CFArrayGetValueAtIndex, c_void_p, [CFArrayRef, CFIndex] )
-fix_cfn( Q.CFDictionaryGetValue, c_void_p, [CFDictionaryRef, c_void_p] )
-fix_cfn( Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, c_void_p] ) 
-fix_cfn( Q.CFRelease, None, [c_void_p] )
+fix_cfn( Q.CFArrayGetValueAtIndex, CFTypeRef, [CFArrayRef, CFIndex] )
+fix_cfn( Q.CFDictionaryGetValue, CFTypeRef, [CFDictionaryRef, CFTypeRef] )
+fix_cfn( Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, CFTypeRef] )
+fix_cfn( Q.CGRectMakeWithDictionaryRepresentation, c_bool,
+	[CFDictionaryRef, POINTER( CGRect )] )
+fix_cfn( Q.CFRelease, None, [CFTypeRef] )
 fix_cfn( Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption] )
+
+fix_cfn( Q.CFArrayCreate, CFArrayRef, [CFAllocatorRef, POINTER( c_void_p ),
+	CFIndex, CFTypeRef ] )
+fix_cfn( Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef] )
+
+#CFArrayRef CFArrayCreate ( CFAllocatorRef allocator, const void **values,
+#	CFIndex numValues, const CFArrayCallBacks *callBacks ); 
 
 """
 ctypes helpers:
 """
-
 # Converts a _FunPtr to c_void_p
-def fn_to_voidp( fn ): return c_void_pp.from_buffer( fn ).contents
+def fn_to_voidp( fn ): return CFTypeRefPtr.from_buffer( fn ).contents
 
 # Handles a CFArray like a generator:
 def cfarray( arr ):
@@ -109,6 +129,7 @@ kCGWindowNumber = fn_to_voidp( Q.kCGWindowNumber )
 kCGWindowName = fn_to_voidp( Q.kCGWindowName )
 kCGWindowOwnerPID = fn_to_voidp( Q.kCGWindowOwnerPID )
 kCGWindowLayer = fn_to_voidp( Q.kCGWindowLayer )
+kCGWindowBounds = fn_to_voidp( Q.kCGWindowBounds )
 
 kCFNumberSInt32Type = 3
 kCFNumberIntType = 9
@@ -117,7 +138,6 @@ kCGWindowIDCFNumberType = kCFNumberSInt32Type
 """
 sublime_windows:
 """
-
 # Wrapper around CFDict from Q.CGWindowListCopyWindowInfo:
 class WinDict( object ):
 	def __init__( self, _dict ):
@@ -139,6 +159,11 @@ class WinDict( object ):
 		return (cfstring_get( self.dict[kCGWindowName] )
 				if kCGWindowName in self.dict else None)
 
+	def bounds( self ):
+		rect = CGRect()
+		return (rect.tuple() if Q.CGRectMakeWithDictionaryRepresentation(
+			self.dict[kCGWindowBounds], byref( rect ) ) else None)
+
 # Checks if window is a sublime text window:
 def is_sublime( win ):
 	pid = win.pid()
@@ -159,10 +184,25 @@ def sublime_windows():
 	finally:
 		Q.CFRelease( windows )
 
+def single_window_dict( w_id ):
+	#w_ids = (CGWindowID * 1)( w_id )#, POINTER( c_void_p ) )
+	print( "w_id", w_id )
+	w_ids = CGWindowID( w_id )
+	#casted = POINTER( CGWindowID ).from_buffer( pointer( w_ids ) )
+	casted = cast( byref( w_ids ), POINTER( c_void_p ) )
+	print( w_ids, casted, 1 )
+	w_arr = Q.CFArrayCreate( None, casted, 1, None )
+	w_desc = Q.CGWindowListCreateDescriptionFromArray( w_arr )
+	print( w_arr, w_desc )
+	desc = next( cfarray( w_desc ) )
+	print( desc )
+	print( WinDict( desc ).id() )
+#	descr = next( )
+#	CFDictionaryRef windowdescription = (CFDictionaryRef) CFArrayGetValueAtIndex( (CFArrayRef) windowsdescription, 0 )
+
 """
 Move event logic:
 """
-
 class MoveEvent( MoveEventMeta ):
 	def run( self ):
 		while self.alive: pass
@@ -173,7 +213,6 @@ class MoveEvent( MoveEventMeta ):
 """
 Public API:
 """
-
 class Driver( DriverMeta ):
 	def __init__( self ):
 		# Let's get things started in here:
@@ -197,7 +236,10 @@ class Driver( DriverMeta ):
 			w_id = w.id()
 			if w_id not in self.win_map:
 				print( "window", w_id, "pid", w.pid(), "title", w.title() )
+				print( "bounds", w.bounds() )
 				self.win_map[w_id] = _id
+
+				single_window_dict( w_id )
 				return
 
 		return None
