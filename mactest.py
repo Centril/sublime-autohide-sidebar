@@ -23,6 +23,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from driver.base import DriverMeta, MoveEventMeta, find_key, map_coordinates
 
+from itertools import starmap
+from contextlib import contextmanager
 from os import popen
 from ctypes import *
 from ctypes.util import find_library
@@ -65,24 +67,22 @@ def fix_cfn( fn, res, args ):
 	fn.restype = res
 	fn.argtypes = args
 
-fix_cfn( Q.CFStringGetLength, CFIndex, [CFStringRef] )
-fix_cfn( Q.CFStringGetCString, c_bool,
-	[CFStringRef, c_char_p, CFIndex, CFStringEncoding] )
-fix_cfn( Q.CFArrayGetCount, CFIndex, [CFArrayRef] )
-fix_cfn( Q.CFArrayGetValueAtIndex, CFTypeRef, [CFArrayRef, CFIndex] )
-fix_cfn( Q.CFDictionaryGetValue, CFTypeRef, [CFDictionaryRef, CFTypeRef] )
-fix_cfn( Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, CFTypeRef] )
-fix_cfn( Q.CGRectMakeWithDictionaryRepresentation, c_bool,
-	[CFDictionaryRef, POINTER( CGRect )] )
-fix_cfn( Q.CFRelease, None, [CFTypeRef] )
-fix_cfn( Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption] )
-
-fix_cfn( Q.CFArrayCreate, CFArrayRef, [CFAllocatorRef, POINTER( c_void_p ),
-	CFIndex, CFTypeRef ] )
-fix_cfn( Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef] )
-
-#CFArrayRef CFArrayCreate ( CFAllocatorRef allocator, const void **values,
-#	CFIndex numValues, const CFArrayCallBacks *callBacks ); 
+list( starmap( fix_cfn, [
+	(Q.CFStringGetLength, CFIndex, [CFStringRef]),
+	(Q.CFStringGetCString, c_bool,
+		[CFStringRef, c_char_p, CFIndex, CFStringEncoding]),
+	(Q.CFArrayCreate, CFArrayRef,
+		[CFAllocatorRef, CFTypeRefPtr, CFIndex, CFTypeRef]),
+	(Q.CFArrayGetCount, CFIndex, [CFArrayRef]),
+	(Q.CFArrayGetValueAtIndex, CFTypeRef, [CFArrayRef, CFIndex]),
+	(Q.CFDictionaryGetValue, CFTypeRef, [CFDictionaryRef, CFTypeRef]),
+	(Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, CFTypeRef]),
+	(Q.CGRectMakeWithDictionaryRepresentation, c_bool,
+		[CFDictionaryRef, POINTER( CGRect )]),
+	(Q.CFRelease, None, [CFTypeRef]),
+	(Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption]),
+	(Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef])
+] ) )
 
 """
 ctypes helpers:
@@ -90,7 +90,8 @@ ctypes helpers:
 # Converts a _FunPtr to c_void_p
 def fn_to_voidp( fn ): return CFTypeRefPtr.from_buffer( fn ).contents
 
-# Handles a CFArray like a generator:
+# Handles a CFArray like a generator,
+# all operations with it are only valid until Q.CFRelease
 def cfarray( arr ):
 	n = Q.CFArrayGetCount( arr )
 	for i in range( n ):
@@ -184,21 +185,15 @@ def sublime_windows():
 	finally:
 		Q.CFRelease( windows )
 
+@contextmanager
 def single_window_dict( w_id ):
-	#w_ids = (CGWindowID * 1)( w_id )#, POINTER( c_void_p ) )
-	print( "w_id", w_id )
-	w_ids = CGWindowID( w_id )
-	#casted = POINTER( CGWindowID ).from_buffer( pointer( w_ids ) )
-	casted = cast( byref( w_ids ), POINTER( c_void_p ) )
-	print( w_ids, casted, 1 )
-	w_arr = Q.CFArrayCreate( None, casted, 1, None )
-	w_desc = Q.CGWindowListCreateDescriptionFromArray( w_arr )
-	print( w_arr, w_desc )
-	desc = next( cfarray( w_desc ) )
-	print( desc )
-	print( WinDict( desc ).id() )
-#	descr = next( )
-#	CFDictionaryRef windowdescription = (CFDictionaryRef) CFArrayGetValueAtIndex( (CFArrayRef) windowsdescription, 0 )
+	w_arr = Q.CFArrayCreate( None,
+		CFTypeRefPtr.from_buffer( pointer( CGWindowID( w_id ) ) ), 1, None )
+	try:
+		w_desc = Q.CGWindowListCreateDescriptionFromArray( w_arr )
+		try: yield WinDict( next( cfarray( w_desc ) ) )
+		finally: Q.CFRelease( w_desc )
+	finally: Q.CFRelease( w_arr )
 
 """
 Move event logic:
@@ -227,7 +222,8 @@ class Driver( DriverMeta ):
 
 	def window_width( self, _id ):
 		win = find_key( self.win_map, _id )
-		return None
+		if not win: return
+		with single_window_dict( win ) as ww: return ww.bounds()[2]
 
 	def register_new_window( self, _id ):
 		if find_key( self.win_map, _id ): return
@@ -236,10 +232,7 @@ class Driver( DriverMeta ):
 			w_id = w.id()
 			if w_id not in self.win_map:
 				print( "window", w_id, "pid", w.pid(), "title", w.title() )
-				print( "bounds", w.bounds() )
 				self.win_map[w_id] = _id
-
-				single_window_dict( w_id )
 				return
 
 		return None
@@ -250,3 +243,5 @@ class Driver( DriverMeta ):
 D = Driver()
 for _id in range( 1, 3 ): D.register_new_window( _id )
 print( D.win_map )
+
+for _id in range( 1, 3 ): print( D.window_width( _id ) )
