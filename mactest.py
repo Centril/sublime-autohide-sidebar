@@ -44,15 +44,11 @@ class CFTypeRef( c_void_p ): pass
 CFTypeRefPtr = POINTER( CFTypeRef )
 CGFloat = c_double if is64bit else c_float
 CFIndex = c_long
-CFStringRef = CFTypeRef
 CFStringEncoding = c_uint32
-CFArrayRef = CFTypeRef
-CFDictionaryRef = CFTypeRef
-CFAllocatorRef = CFTypeRef
-CGWindowID = c_uint32
-CGWindowListOption = c_uint32
-CGEventRef = CFTypeRef
-CGEventSourceRef = CFTypeRef
+CFBooleanRef = CFTypeRef
+CFStringRef = CFArrayRef = CFDictionaryRef = CFAllocatorRef = CFTypeRef
+CGWindowID = CGWindowListOption = c_uint32
+CGEventRef = CGEventSourceRef = CFTypeRef
 
 class CGPoint( Structure ):
 	_fields_ = [('_x', CGFloat), ('_y', CGFloat)]
@@ -82,7 +78,8 @@ list( starmap( fix_cfn, [
 	(Q.CGRectMakeWithDictionaryRepresentation, c_bool,
 		[CFDictionaryRef, POINTER( CGRect )]),
 	(Q.CFRelease, None, [CFTypeRef]),
-	(Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption]),
+	(Q.CGWindowListCreate, CFArrayRef, [CGWindowListOption, CGWindowID]),
+	(Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption, CGWindowID]),
 	(Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef]),
 	(Q.CGEventCreate, CGEventRef, [CGEventSourceRef]),
 	(Q.CGEventGetLocation, CGPoint, [CGEventRef]) 
@@ -91,54 +88,50 @@ list( starmap( fix_cfn, [
 """
 ctypes helpers:
 """
-# Converts a _FunPtr to c_void_p
-def fn_to_voidp( fn ): return CFTypeRefPtr.from_buffer( fn ).contents
+# Yields from fn(x) and releases x after:
+def do_release( x, fn ):
+	try: yield from fn( x )
+	finally: Q.CFRelease( x )
 
-# Handles a CFArray like a generator,
-# all operations with it are only valid until Q.CFRelease
-def cfarray( arr ):
-	n = Q.CFArrayGetCount( arr )
-	for i in range( n ):
-		yield Q.CFArrayGetValueAtIndex( arr, i )
+# Manages a CFArray like a generator and cleans up after usage:
+def cfarray( arr, map_fn = lambda x: x ):
+	yield from do_release( arr, lambda arr:
+		(map_fn( Q.CFArrayGetValueAtIndex( arr, i ) )
+		 for i in range( Q.CFArrayGetCount( arr ) )) )
 
 # Returns object of _restype using CFNumberRef _from interpreting as _type:
 def cfnumber_get( _type, _restype, _from ):
 	_to = _restype()
-	r = Q.CFNumberGetValue( _from, _type, byref( _to ) )
-	return _to
+	return Q.CFNumberGetValue( _from, _type, byref( _to ) ) and _to
 
 # Returns contents of cfstring as a byte slice:
 def cfstring_get( ref ):
-	str_length = Q.CFStringGetLength( ref ) + 1
-	str_buf = create_string_buffer( str_length )
-	result = Q.CFStringGetCString( ref, str_buf, str_length, 0 )
-	return str_buf.value.decode( errors = 'ignore' )
+	_len = Q.CFStringGetLength( ref ) + 1
+	_buf = create_string_buffer( _len )
+	return (Q.CFStringGetCString( ref, _buf, _len, 0 ) and
+		_buf.value.decode( errors = 'ignore' ))
 
 # View of CFDictionaryRef as a python dict (partial implementation):
 class CFDict( object ):
-	def __init__( self, data ):
-		self.data = data
-
-	def __getitem__( self, key ):
-		return Q.CFDictionaryGetValue( self.data, key )
-
-	def __contains__( self, key ):
-		return Q.CFDictionaryContainsKey( self.data, key )
+	def __init__( self, data ): self.d = data
+	def __getitem__( self, k ): return Q.CFDictionaryGetValue( self.d, k )
+	def __contains__( self, k ): return Q.CFDictionaryContainsKey( self.d, k )
 
 """
 Constants:
 """
+kCGWindowListOptionOnScreenOnly = (1 << 0)
 kCGWindowListExcludeDesktopElements = CGWindowListOption( 1 << 4 )
 kCGNullWindowID = CGWindowID( 0 )
-kCGWindowNumber = fn_to_voidp( Q.kCGWindowNumber )
-kCGWindowName = fn_to_voidp( Q.kCGWindowName )
-kCGWindowOwnerPID = fn_to_voidp( Q.kCGWindowOwnerPID )
-kCGWindowLayer = fn_to_voidp( Q.kCGWindowLayer )
-kCGWindowBounds = fn_to_voidp( Q.kCGWindowBounds )
-
 kCFNumberSInt32Type = 3
 kCFNumberIntType = 9
 kCGWindowIDCFNumberType = kCFNumberSInt32Type
+
+# Convert these constants from _FunPtr to c_void_p
+[WNumber, WName, WOwnerPID, WLayer, WBounds] = map(
+	lambda fn: CFTypeRefPtr.from_buffer( fn ).contents,
+	[Q.kCGWindowNumber, Q.kCGWindowName, Q.kCGWindowOwnerPID,
+	 Q.kCGWindowLayer, Q.kCGWindowBounds] )
 
 """
 sublime_windows:
@@ -152,22 +145,24 @@ class WinDict( object ):
 		return cfnumber_get( type_id, to_type, self.dict[key] ).value
 
 	def id( self ):
-		return self._get( kCGWindowNumber, kCGWindowIDCFNumberType, CGWindowID )
+		return self._get( WNumber, kCGWindowIDCFNumberType, CGWindowID )
 
-	def pid( self ):
-		return self._get( kCGWindowOwnerPID, kCFNumberIntType, c_int )
+	def pid( self ): return self._get( WOwnerPID, kCFNumberIntType, c_int )
 
-	def level( self ):
-		return self._get( kCGWindowLayer, kCFNumberIntType, c_int )
+	def level( self ): return self._get( WLayer, kCFNumberIntType, c_int )
 
 	def title( self ):
-		return (cfstring_get( self.dict[kCGWindowName] )
-				if kCGWindowName in self.dict else None)
+		return WName in self.dict and cfstring_get( self.dict[WName] )
 
 	def bounds( self ):
 		rect = CGRect()
-		return (rect.tuple() if Q.CGRectMakeWithDictionaryRepresentation(
-			self.dict[kCGWindowBounds], byref( rect ) ) else None)
+		return Q.CGRectMakeWithDictionaryRepresentation( self.dict[WBounds],
+			byref( rect ) ) and rect.tuple()
+
+	def is_onscreen( self ):
+		return self.id() in list( cfarray( Q.CGWindowListCreate(
+			kCGWindowListOptionOnScreenOnly, kCGNullWindowID ),
+			lambda x: x.value ) )
 
 # Checks if window is a sublime text window:
 def is_sublime( win ):
@@ -177,33 +172,19 @@ def is_sublime( win ):
 	return r and "Sublime Text" in r[-1] and win.level() == 0 and win.title()
 
 def sublime_windows():
-	windows = Q.CGWindowListCopyWindowInfo(
-		kCGWindowListExcludeDesktopElements, kCGNullWindowID )
-
-	if not windows: quit( "Can't access CGWindows! ")
-
-	try:
-		for _win in cfarray( windows ):
-			w = WinDict( _win )
-			if is_sublime( w ): yield w
-	finally:
-		Q.CFRelease( windows )
+	return filter( is_sublime, cfarray( Q.CGWindowListCopyWindowInfo(
+		kCGWindowListExcludeDesktopElements, kCGNullWindowID ), WinDict ) )
 
 @contextmanager
 def single_window_dict( w_id ):
-	w_arr = Q.CFArrayCreate( None,
-		CFTypeRefPtr.from_buffer( pointer( CGWindowID( w_id ) ) ), 1, None )
-	try:
-		w_desc = Q.CGWindowListCreateDescriptionFromArray( w_arr )
-		try: yield WinDict( next( cfarray( w_desc ) ) )
-		finally: Q.CFRelease( w_desc )
-	finally: Q.CFRelease( w_arr )
+	yield from do_release( Q.CFArrayCreate( None,
+		CFTypeRefPtr.from_buffer( pointer( CGWindowID( w_id ) ) ), 1, None ),
+		lambda arr: cfarray( Q.CGWindowListCreateDescriptionFromArray( arr ),
+							 WinDict ) )
 
 def get_cursor_location():
-	event = Q.CGEventCreate( None )
-	try: loc = Q.CGEventGetLocation( event )
-	finally: Q.CFRelease( event )
-	return loc.tuple()
+	return do_release( Q.CGEventCreate( None ),
+				lambda e: Q.CGEventGetLocation( e ).tuple() )
 
 """
 Move event logic:
@@ -231,8 +212,8 @@ class Driver( DriverMeta ):
 
 		# Get geometrics & pointer:
 		with single_window_dict( win ) as w:
+			if not w.is_onscreen(): return
 			(wx, wy, ww, wh) = w.bounds()
-
 		rx, ry = 0, 0
 		cx, cy = get_cursor_location()
 
