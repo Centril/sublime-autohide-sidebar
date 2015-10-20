@@ -176,8 +176,12 @@ class WinDict( object ):
 		self._id = _id
 
 	def from_ids( w_ids ):
-	#	print( [w for w in (CGWindowID * len( w_ids ))( *w_ids )] )
 		arr = cast( (CGWindowID * len( w_ids ))( *w_ids ), CFTypeRefPtr )
+		arr2 = Q.CFArrayCreate( None, arr, len( w_ids ), None )
+		print( "count", Q.CFArrayGetCount( arr2 ) )
+		arr2 = Q.CGWindowListCreateDescriptionFromArray( arr2 )
+		print( "count", Q.CFArrayGetCount( arr2 ) )
+
 		yield from do_release( Q.CFArrayCreate( None, arr, len( w_ids ), None ),
 			lambda a: cfarray( Q.CGWindowListCreateDescriptionFromArray( a ),
 								 lambda w, i: WinDict( w, w_ids[i] ) ) )
