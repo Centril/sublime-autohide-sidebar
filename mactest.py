@@ -138,14 +138,17 @@ sublime_windows:
 """
 # Wrapper around CFDict from Q.CGWindowListCopyWindowInfo:
 class WinDict( object ):
-	def __init__( self, _dict ):
+	def __init__( self, _dict, _id = None ):
 		self.dict = CFDict( _dict )
+		self._id = _id
 
 	def _get( self, key, type_id, to_type ):
 		return cfnumber_get( type_id, to_type, self.dict[key] ).value
 
 	def id( self ):
-		return self._get( WNumber, kCGWindowIDCFNumberType, CGWindowID )
+		if not self._id:
+			self._id = self._get( WNumber, kCGWindowIDCFNumberType, CGWindowID )
+		return self._id
 
 	def pid( self ): return self._get( WOwnerPID, kCFNumberIntType, c_int )
 
@@ -180,7 +183,7 @@ def single_window_dict( w_id ):
 	yield from do_release( Q.CFArrayCreate( None,
 		CFTypeRefPtr.from_buffer( pointer( CGWindowID( w_id ) ) ), 1, None ),
 		lambda arr: cfarray( Q.CGWindowListCreateDescriptionFromArray( arr ),
-							 WinDict ) )
+							 lambda w: WinDict( w, w_id ) ) )
 
 def get_cursor_location():
 	return do_release( Q.CGEventCreate( None ),
