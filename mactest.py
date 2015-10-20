@@ -175,12 +175,18 @@ class WinDict( object ):
 		self.dict = CFDict( _dict )
 		self._id = _id
 
-	@contextmanager
 	def from_ids( w_ids ):
+	#	print( [w for w in (CGWindowID * len( w_ids ))( *w_ids )] )
 		arr = cast( (CGWindowID * len( w_ids ))( *w_ids ), CFTypeRefPtr )
 		yield from do_release( Q.CFArrayCreate( None, arr, len( w_ids ), None ),
 			lambda a: cfarray( Q.CGWindowListCreateDescriptionFromArray( a ),
 								 lambda w, i: WinDict( w, w_ids[i] ) ) )
+
+	def ids( opt, rel ):
+		return cfarray( Q.CGWindowListCreate( opt, rel ), lambda x, i: x.value )
+
+	def onscreen_ids():
+		return WinDict.ids( kCGWindowListOptionOnScreenOnly, kCGNullWindowID )
 
 	def noid( _dict, i ): return WinDict( _dict )
 
@@ -204,10 +210,8 @@ class WinDict( object ):
 		return Q.CGRectMakeWithDictionaryRepresentation( self.dict[WBounds],
 			byref( rect ) ) and rect.tuple()
 
-	def is_onscreen( self ):
-		return self.id() in list( cfarray( Q.CGWindowListCreate(
-			kCGWindowListOptionOnScreenOnly, kCGNullWindowID ),
-			lambda x, i: x.value ) )
+	def is_onscreen( self, onscreen_ids = None ):
+		return self.id() in list( onscreen_ids or WinDict.onscreen_ids() )
 
 # Checks if window is a sublime text window:
 def is_sublime( win ):
@@ -262,8 +266,29 @@ class MoveEvent( MoveEventMeta ):
 				Q.CFRelease( source )
 
 	def handler( self, proxy, _type, event, d ):
-		x, y = Q.CGEventGetLocation( event ).tuple()
-		print( "move", x, y )
+		pos = Q.CGEventGetLocation( event ).tuple()
+
+		print( "move", pos )
+
+		onscreen_ids = list( WinDict.onscreen_ids() )
+		w_ids = list( self.driver.win_map.keys() )
+
+
+		print( w_ids, onscreen_ids )
+
+		for w in WinDict.from_ids( w_ids ):
+			print( "I am id:", w.id() )
+			# Not on screen => next:
+			if w.id() not in onscreen_ids:
+				print( w.id(), "not on screen" )
+				continue
+			# Not in bounds => next:
+			if not point_within_bounds( pos, w.bounds() ):
+				print( w.id(), "not within bounds" )
+				continue
+
+			print( w.id(), "we have arrived!")
+			# Make sure it is on top of everyone at that point:
 
 	def _stopx( self ):
 		# Stop the run loop, this will unblock Q.CFRunLoopRun():
@@ -281,25 +306,22 @@ class Driver( DriverMeta ):
 
 	def window_coordinates( self, _id ):
 		# Fetch window or quit if not available:
-		w_id = find_key( self.win_map, _id )
-		if not w_id: return
+		wid = find_key( self.win_map, _id )
+		if not wid: return
 
 		# Get geometrics & pointer:
-		with WinDict.from_ids( [w_id] ) as w:
-			if not w.is_onscreen(): return
-			bounds = w.bounds()
-			print( bounds )
+		bounds = next( (w.bounds() for w in WinDict.from_ids( [wid] )
+						if w.is_onscreen()), None )
+		if not bounds: return
+		pos = get_cursor_location()
 
-		c = get_cursor_location()
-
-		# Map c to space(win) if within space:
-		if point_within_bounds( c, bounds ):
-			return _map_coordinates( (0, 0), bounds, c )
+		# Map pos to space(win) if within space:
+		if point_within_bounds( pos, bounds ):
+			return _map_coordinates( (0, 0), bounds, pos )
 
 	def window_width( self, _id ):
-		w_id = find_key( self.win_map, _id )
-		if not w_id: return
-		with WinDict.from_ids( [w_id] ) as w: return w.bounds()[2]
+		wid = find_key( self.win_map, _id )
+		return wid and next( w.bounds()[2] for w in WinDict.from_ids( [wid] ) )
 
 	def register_new_window( self, _id ):
 		if find_key( self.win_map, _id ): return
@@ -321,8 +343,8 @@ for _id in range( 1, 3 ): D.register_new_window( _id )
 print( D.win_map )
 
 for _id in range( 1, 3 ):
-	print( D.window_width( _id ) )
-	print( D.window_coordinates( _id ) )
+	print( "width", D.window_width( _id ) )
+	print( "coords", D.window_coordinates( _id ) )
 
 T = D.tracker(	lambda _id, x, y: print( "move", _id, x, y ),
 				lambda _id: print( "leave", _id ) )
