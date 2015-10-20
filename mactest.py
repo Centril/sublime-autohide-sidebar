@@ -39,16 +39,25 @@ Q = lib( "quartz" )
 """
 Typedefs, Functions, Structures:
 """
+# Primitives:
 is64bit = sizeof( c_void_p ) != 4
 class CFTypeRef( c_void_p ): pass
 CFTypeRefPtr = POINTER( CFTypeRef )
 CGFloat = c_double if is64bit else c_float
 CFIndex = c_long
 CFStringEncoding = c_uint32
-CFBooleanRef = CFTypeRef
-CFStringRef = CFArrayRef = CFDictionaryRef = CFAllocatorRef = CFTypeRef
+CFBooleanRef = CFStringRef =\
+CFArrayRef = CFDictionaryRef = CFAllocatorRef = CFTypeRef
+# Window info:
 CGWindowID = CGWindowListOption = c_uint32
-CGEventRef = CGEventSourceRef = CFTypeRef
+# Event tap:
+CFRunLoopRef = CFRunLoopSourceRef =\
+CGEventTapProxy = CFMachPortRef = CGEventSourceRef = CGEventRef = CFTypeRef
+CGEventTapLocation = CGEventTapPlacement =\
+CGEventTapOptions = CGEventType = c_uint32
+CGEventMask = c_uint64
+CGEventTapCallBack = CFUNCTYPE( CGEventRef,
+	CGEventTapProxy, CGEventType, CGEventRef, CFTypeRef )
 
 class CGPoint( Structure ):
 	_fields_ = [('_x', CGFloat), ('_y', CGFloat)]
@@ -65,7 +74,10 @@ def fix_cfn( fn, res, args ):
 	fn.restype = res
 	fn.argtypes = args
 
+# This fixes ALL FFI functions used in Quartz (ApplicationServices.h):
 list( starmap( fix_cfn, [
+	# Primitives:
+	(Q.CFRelease, None, [CFTypeRef]),
 	(Q.CFStringGetLength, CFIndex, [CFStringRef]),
 	(Q.CFStringGetCString, c_bool,
 		[CFStringRef, c_char_p, CFIndex, CFStringEncoding]),
@@ -77,12 +89,27 @@ list( starmap( fix_cfn, [
 	(Q.CFDictionaryContainsKey, c_bool, [CFDictionaryRef, CFTypeRef]),
 	(Q.CGRectMakeWithDictionaryRepresentation, c_bool,
 		[CFDictionaryRef, POINTER( CGRect )]),
-	(Q.CFRelease, None, [CFTypeRef]),
+	# Window information:
 	(Q.CGWindowListCreate, CFArrayRef, [CGWindowListOption, CGWindowID]),
 	(Q.CGWindowListCopyWindowInfo, CFArrayRef, [CGWindowListOption, CGWindowID]),
 	(Q.CGWindowListCreateDescriptionFromArray, CFArrayRef, [CFArrayRef]),
+	# Pointer, Events & taps:
 	(Q.CGEventCreate, CGEventRef, [CGEventSourceRef]),
-	(Q.CGEventGetLocation, CGPoint, [CGEventRef]) 
+	(Q.CGEventGetLocation, CGPoint, [CGEventRef]),
+	(Q.CGEventTapCreate, CFMachPortRef, [CGEventTapLocation,
+		CGEventTapPlacement, CGEventTapOptions, CGEventMask,
+		CGEventTapCallBack, CFTypeRef]),
+	(Q.CGEventTapEnable, None, [CFMachPortRef, c_bool]),
+	(Q.CFMachPortCreateRunLoopSource, CFRunLoopSourceRef,
+		[CFAllocatorRef, CFMachPortRef, CFIndex]),
+	(Q.CFMachPortIsValid, c_bool, [CFMachPortRef]),
+	(Q.CFMachPortInvalidate, None, [CFMachPortRef]),
+	(Q.CFRunLoopGetCurrent, CFRunLoopRef, []),
+	(Q.CFRunLoopAddSource, None,
+		[CFRunLoopRef, CFRunLoopSourceRef, CFStringRef]),
+	(Q.CFRunLoopRun, None, []),
+	(Q.CFRunLoopStop, None, [CFRunLoopRef]),
+	(Q.CFRunLoopSourceInvalidate, None, [CFRunLoopSourceRef])
 ] ) )
 
 """
@@ -120,21 +147,27 @@ class CFDict( object ):
 """
 Constants:
 """
+# Window info:
 kCGWindowListOptionOnScreenOnly = (1 << 0)
 kCGWindowListExcludeDesktopElements = CGWindowListOption( 1 << 4 )
 kCGNullWindowID = CGWindowID( 0 )
 kCFNumberSInt32Type = 3
 kCFNumberIntType = 9
 kCGWindowIDCFNumberType = kCFNumberSInt32Type
-
+# Event taps:
+kCGSessionEventTap = CGEventTapLocation( 1 )
+kCGHeadInsertEventTap = CGEventTapPlacement( 0 )
+kCGEventTapOptionListenOnly = CGEventTapOptions( 1 )
+# Using kCGEventMouseMoved
+EventTapMask = CGEventMask( 1 << 5 )
 # Convert these constants from _FunPtr to c_void_p
-[WNumber, WName, WOwnerPID, WLayer, WBounds] = map(
+[WNumber, WName, WOwnerPID, WLayer, WBounds, RunLoopDefaultMode] = map(
 	lambda fn: CFTypeRefPtr.from_buffer( fn ).contents,
 	[Q.kCGWindowNumber, Q.kCGWindowName, Q.kCGWindowOwnerPID,
-	 Q.kCGWindowLayer, Q.kCGWindowBounds] )
+	 Q.kCGWindowLayer, Q.kCGWindowBounds, Q.kCFRunLoopDefaultMode] )
 
 """
-sublime_windows:
+Helpers:
 """
 # Wrapper around CFDict from Q.CGWindowListCopyWindowInfo:
 class WinDict( object ):
@@ -192,12 +225,43 @@ def get_cursor_location():
 """
 Move event logic:
 """
+
 class MoveEvent( MoveEventMeta ):
+	def __init__( self, driver, move, leave ):
+		# For some reason X11 can't work with daemon threads:
+		super().__init__( driver, move, leave, False )
+
 	def run( self ):
-		while self.alive: pass
+		# Create tap or quit if failure:
+		cb = CGEventTapCallBack( self.handler )
+		port = Q.CGEventTapCreate( kCGSessionEventTap, kCGHeadInsertEventTap,
+			kCGEventTapOptionListenOnly, EventTapMask, cb, None )
+		if not port: quit( "FATAL ERROR: Could not create Quartz Events Tap!" )
+
+		# Create source, attach source to run loop, enable tap:
+		source = Q.CFMachPortCreateRunLoopSource( None, port, 0 )
+		self.loop = Q.CFRunLoopGetCurrent()
+		Q.CFRunLoopAddSource( self.loop, source, RunLoopDefaultMode )
+		Q.CGEventTapEnable( port, True )
+
+		# Run event pump while we can, then cleanup:
+		try:
+			while self.alive: Q.CFRunLoopRun()
+		finally:
+			if Q.CFMachPortIsValid( port ):
+				Q.CFMachPortInvalidate( port )
+				Q.CFRunLoopSourceInvalidate( source )
+				Q.CFRelease( port )
+				Q.CFRelease( source )
+
+	def handler( self, proxy, _type, event, d ):
+		x, y = Q.CGEventGetLocation( event ).tuple()
+		print( "move", x, y )
 
 	def _stopx( self ):
-		pass
+		# Stop the run loop, this will unblock Q.CFRunLoopRun():
+		# Cleanup is done in .run().
+		Q.CFRunLoopStop( self.loop )
 
 """
 Public API:
@@ -253,3 +317,9 @@ print( D.win_map )
 for _id in range( 1, 3 ):
 	print( D.window_width( _id ) )
 	print( D.window_coordinates( _id ) )
+
+T = D.tracker(	lambda _id, x, y: print( "move", _id, x, y ),
+				lambda _id: print( "leave", _id ) )
+T.start()
+def stop():
+	T.stopx()
