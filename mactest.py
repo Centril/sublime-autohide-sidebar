@@ -233,19 +233,14 @@ class Driver( DriverMeta ):
 		with single_window_dict( win ) as w:
 			(wx, wy, ww, wh) = w.bounds()
 
+		rx, ry = 0, 0
 		cx, cy = get_cursor_location()
-		print( cx, cy )
-
-		"""
-		(rx, ry, _, _), _ = root.geom()
-		cx, cy, _, _ = root.pointer()
 
 		# Quit if not within bounds:
 		if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
 
 		# Map (cx, cy) to space( win ):
 		return map_coordinates( rx, ry, wx, wy, cx, cy )
-		"""
 
 	def window_width( self, _id ):
 		w_id = find_key( self.win_map, _id )
