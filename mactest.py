@@ -121,9 +121,9 @@ def do_release( x, fn ):
 	finally: Q.CFRelease( x )
 
 # Manages a CFArray like a generator and cleans up after usage:
-def cfarray( arr, map_fn = lambda x: x ):
+def cfarray( arr, map_fn = lambda x, i: x ):
 	yield from do_release( arr, lambda arr:
-		(map_fn( Q.CFArrayGetValueAtIndex( arr, i ) )
+		(map_fn( Q.CFArrayGetValueAtIndex( arr, i ), i )
 		 for i in range( Q.CFArrayGetCount( arr ) )) )
 
 # Returns object of _restype using CFNumberRef _from interpreting as _type:
@@ -175,6 +175,15 @@ class WinDict( object ):
 		self.dict = CFDict( _dict )
 		self._id = _id
 
+	@contextmanager
+	def from_ids( w_ids ):
+		arr = cast( (CGWindowID * len( w_ids ))( *w_ids ), CFTypeRefPtr )
+		yield from do_release( Q.CFArrayCreate( None, arr, len( w_ids ), None ),
+			lambda a: cfarray( Q.CGWindowListCreateDescriptionFromArray( a ),
+								 lambda w, i: WinDict( w, w_ids[i] ) ) )
+
+	def noid( _dict, i ): return WinDict( _dict )
+
 	def _get( self, key, type_id, to_type ):
 		return cfnumber_get( type_id, to_type, self.dict[key] ).value
 
@@ -198,7 +207,7 @@ class WinDict( object ):
 	def is_onscreen( self ):
 		return self.id() in list( cfarray( Q.CGWindowListCreate(
 			kCGWindowListOptionOnScreenOnly, kCGNullWindowID ),
-			lambda x: x.value ) )
+			lambda x, i: x.value ) )
 
 # Checks if window is a sublime text window:
 def is_sublime( win ):
@@ -209,28 +218,26 @@ def is_sublime( win ):
 
 def sublime_windows():
 	return filter( is_sublime, cfarray( Q.CGWindowListCopyWindowInfo(
-		kCGWindowListExcludeDesktopElements, kCGNullWindowID ), WinDict ) )
+		kCGWindowListExcludeDesktopElements, kCGNullWindowID ), WinDict.noid ) )
 
-@contextmanager
-def single_window_dict( w_id ):
-	yield from do_release( Q.CFArrayCreate( None,
-		CFTypeRefPtr.from_buffer( pointer( CGWindowID( w_id ) ) ), 1, None ),
-		lambda arr: cfarray( Q.CGWindowListCreateDescriptionFromArray( arr ),
-							 lambda w: WinDict( w, w_id ) ) )
-
+# Returns the cursor position as (x, y):
 def get_cursor_location():
-	return do_release( Q.CGEventCreate( None ),
-				lambda e: Q.CGEventGetLocation( e ).tuple() )
+	return tuple( do_release( Q.CGEventCreate( None ),
+				lambda e: Q.CGEventGetLocation( e ).tuple() ) )
+
+# Checks if point (x, y) is within bounds (l, t, w, h):
+def point_within_bounds( p, b ): 
+	return (b[0] <= p[0] <= (b[0] + b[2])) and (b[1] <= p[1] <= (b[1] + b[3]))
+
+# Maps c from space(r) -> space(w), all input are given in (x, y):
+def _map_coordinates( r, w, c ):
+	return map_coordinates( r[0], r[1], w[0], w[1], c[0], c[1] )
 
 """
 Move event logic:
 """
 
 class MoveEvent( MoveEventMeta ):
-	def __init__( self, driver, move, leave ):
-		# For some reason X11 can't work with daemon threads:
-		super().__init__( driver, move, leave, False )
-
 	def run( self ):
 		# Create tap or quit if failure:
 		cb = CGEventTapCallBack( self.handler )
@@ -274,26 +281,25 @@ class Driver( DriverMeta ):
 
 	def window_coordinates( self, _id ):
 		# Fetch window or quit if not available:
-		win = find_key( self.win_map, _id )
-		if not win: return
+		w_id = find_key( self.win_map, _id )
+		if not w_id: return
 
 		# Get geometrics & pointer:
-		with single_window_dict( win ) as w:
+		with WinDict.from_ids( [w_id] ) as w:
 			if not w.is_onscreen(): return
-			(wx, wy, ww, wh) = w.bounds()
-		rx, ry = 0, 0
-		cx, cy = get_cursor_location()
+			bounds = w.bounds()
+			print( bounds )
 
-		# Quit if not within bounds:
-		if not ((wx <= cx <= (wx + ww)) and (wy <= cy <= (wy + wh))): return
+		c = get_cursor_location()
 
-		# Map (cx, cy) to space( win ):
-		return map_coordinates( rx, ry, wx, wy, cx, cy )
+		# Map c to space(win) if within space:
+		if point_within_bounds( c, bounds ):
+			return _map_coordinates( (0, 0), bounds, c )
 
 	def window_width( self, _id ):
 		w_id = find_key( self.win_map, _id )
 		if not w_id: return
-		with single_window_dict( w_id ) as w: return w.bounds()[2]
+		with WinDict.from_ids( [w_id] ) as w: return w.bounds()[2]
 
 	def register_new_window( self, _id ):
 		if find_key( self.win_map, _id ): return
